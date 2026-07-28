@@ -1,0 +1,12 @@
+goal_id,pattern,exclude_pattern,notes
+back_squat,"(?i)\b(back\s*squat|barbell\s*squat|squat\s*\(barbell\))\b","(?i)\b(front|goblet|hack|split|bulgarian)\b",Barbell back-squat variations only.
+bench_press,"(?i)\b(bench\s*press|barbell\s*bench|bench\s*\(barbell\))\b","(?i)\b(dumbbell|incline|decline|machine|smith)\b",Flat barbell bench preferred.
+deadlift,"(?i)\b(deadlift|conventional\s*deadlift|sumo\s*deadlift)\b","(?i)\b(romanian|rdl|stiff|single.leg)\b",Conventional or sumo deadlift; excludes RDL variants.
+pull_ups,"(?i)\b(pull[ -]?ups?|chin[ -]?ups?)\b",,Bodyweight or weighted pull-up/chin-up sets.
+pushups,"(?i)\b(push[ -]?ups?)\b","(?i)\b(clap|plyo|plyometric|weighted|incline|decline)\b",Standard push-ups; one-minute verification requires set duration data.
+bar_hang,"(?i)\b(dead\s*hang|bar\s*hang|hang\s*hold)\b",,Uses recorded set duration.
+row,"(?i)\b(barbell\s*row|bent[ -]?over\s*row|pendlay\s*row|row\s*\(barbell\))\b","(?i)\b(dumbbell|cable|machine|chest.supported|t.bar)\b",Barbell row variations only.
+overhead_press,"(?i)\b(overhead\s*press|military\s*press|shoulder\s*press\s*\(barbell\)|barbell\s*overhead)\b","(?i)\b(dumbbell|machine|smith|seated)\b",Standing barbell overhead press preferred.
+farmer_carry,"(?i)\b(farmer'?s?\s*(carry|walk)|farmers?\s*(carry|walk))\b",,Recorded weight is assumed to be per hand.
+plank,"(?i)\bplank\b","(?i)\b(side|copenhagen|high|weighted|pull.through)\b",Standard front plank; uses recorded set duration.
+get_up,"(?i)\b(turkish\s*get[ -]?up|get[ -]?up)\b",,Uses the heaviest recorded loaded set.
