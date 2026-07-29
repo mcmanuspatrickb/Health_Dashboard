@@ -983,7 +983,7 @@ with st.sidebar:
         "are stored in data/goal_exercise_aliases.csv."
     )
     st.caption(
-        "V09 performance mode: only the selected dashboard section is loaded."
+        "V10: sections remain lazy-loaded; endurance now has its own progress view."
     )
 
 source_status = []
@@ -1018,6 +1018,7 @@ SECTION_OPTIONS = [
     "Overview & Goals",
     "Workout Review",
     "Strength Progress",
+    "Endurance",
     "Body Composition & Nutrition",
     "Recovery & Data Quality",
 ]
@@ -1062,7 +1063,7 @@ if selected_section == "Overview & Goals":
         lambda: load_google_health_nutrition(days=90),
         source_status,
     )
-    # Endurance history is intentionally deferred to Recovery & Data Quality.
+    # Endurance history is intentionally deferred to the Endurance section.
     goal_progress = build_goal_progress(
         goals,
         body,
@@ -1107,6 +1108,21 @@ elif selected_section == "Strength Progress":
         proxy_config=body_proxy,
     )
 
+elif selected_section == "Endurance":
+    endurance = safe_frame(
+        "Google Health endurance sessions",
+        lambda: load_google_health_endurance_sessions(days=730),
+        source_status,
+    )
+    goal_progress = build_goal_progress(
+        goals,
+        body,
+        df,
+        endurance,
+        alias_rules,
+        proxy_config=body_proxy,
+    )
+
 elif selected_section == "Body Composition & Nutrition":
     body = safe_frame(
         "Google Health body composition",
@@ -1116,6 +1132,11 @@ elif selected_section == "Body Composition & Nutrition":
     nutrition = safe_frame(
         "Cronometer nutrition",
         lambda: load_google_health_nutrition(days=90),
+        source_status,
+    )
+    endurance = safe_frame(
+        "Google Health endurance sessions",
+        lambda: load_google_health_endurance_sessions(days=90),
         source_status,
     )
     goal_progress = build_goal_progress(
@@ -1144,29 +1165,7 @@ elif selected_section == "Recovery & Data Quality":
         lambda: load_google_health_sleep(days=90),
         source_status,
     )
-    body = safe_frame(
-        "Google Health body composition",
-        lambda: load_google_health_body(days=365),
-        source_status,
-    )
-    nutrition = safe_frame(
-        "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
-        source_status,
-    )
-    endurance = safe_frame(
-        "Google Health endurance sessions",
-        lambda: load_google_health_endurance_sessions(days=730),
-        source_status,
-    )
-    goal_progress = build_goal_progress(
-        goals,
-        body,
-        df,
-        endurance,
-        alias_rules,
-        proxy_config=body_proxy,
-    )
+
 
 if selected_section == "Overview & Goals":
     st.header("Current overview")
@@ -1318,7 +1317,7 @@ if selected_section == "Overview & Goals":
         ]
         render_goal_table(overview_goal_progress)
         st.caption(
-            "Run, swim and bike goal history loads only in Recovery & Data Quality "
+            "Run, swim and bike goal history loads only in Endurance "
             "to keep the Overview fast."
         )
 
@@ -1613,45 +1612,370 @@ elif selected_section == "Strength Progress":
             "Edit data/goal_exercise_aliases.csv when a Hevy exercise name is not mapped correctly."
         )
 
-elif selected_section == "Body Composition & Nutrition":
-    st.header("Body composition and nutrition")
-    body_left, nutrition_right = st.columns(2)
-    with body_left:
-        st.subheader("Google Health body composition")
-        latest_weight = latest_value(body, "weight_kg")
-        latest_fat = latest_value(body, "body_fat_pct")
-        latest_paired = body_calc.iloc[-1] if not body_calc.empty else None
-        bone_baseline = float(body_proxy["bone_mass_baseline_kg"])
-        b = st.columns(2)
-        b[0].metric("Weight", f"{latest_weight:.2f} kg" if latest_weight is not None else "—")
-        b[1].metric("Body fat", f"{latest_fat:.2f}%" if latest_fat is not None else "—")
-        b2 = st.columns(2)
-        b2[0].metric(
-            "Calculated fat mass",
-            f"{latest_paired['calculated_fat_mass_kg']:.2f} kg" if latest_paired is not None else "—",
-        )
-        b2[1].metric(
-            "Estimated muscle mass",
-            f"{latest_paired['estimated_muscle_mass_kg']:.2f} kg" if latest_paired is not None else "—",
-        )
-        st.metric(
-            "Estimated muscle mass %",
-            f"{latest_paired['estimated_muscle_mass_pct_7d_median']:.2f}%"
-            if latest_paired is not None
-            else "—",
-            f"{latest_paired['estimated_muscle_mass_pct_7d_median'] - 80:+.1f} pp vs >80%"
-            if latest_paired is not None
-            else None,
+
+elif selected_section == "Endurance":
+    st.header("Endurance progress")
+
+    if endurance.empty:
+        st.info("No reconciled run, swim or bike sessions are available.")
+    else:
+        activity_labels = {
+            "run": "Run",
+            "swim": "Swim",
+            "bike": "Bike",
+        }
+        available_activities = [
+            activity
+            for activity in ("run", "swim", "bike")
+            if activity in set(endurance["goal_activity"].astype(str))
+        ]
+        # Keep all three selectable even when one currently has no data.
+        activity_options = ["run", "swim", "bike"]
+        selected_activity = st.radio(
+            "Endurance activity",
+            activity_options,
+            horizontal=True,
+            format_func=lambda value: activity_labels[value],
+            key="endurance_activity",
         )
 
-        if body.empty:
-            st.info("No body-composition data is available.")
+        activity = endurance[
+            endurance["goal_activity"].astype(str).eq(selected_activity)
+        ].copy()
+        activity["date"] = pd.to_datetime(activity["date"], errors="coerce")
+        activity["distance_km"] = pd.to_numeric(
+            activity["distance_km"], errors="coerce"
+        )
+        activity["duration_hours"] = pd.to_numeric(
+            activity["duration_hours"], errors="coerce"
+        )
+        activity["average_hr"] = pd.to_numeric(
+            activity["average_hr"], errors="coerce"
+        )
+        activity = activity.dropna(subset=["date"]).sort_values("date")
+
+        st.subheader(f"{activity_labels[selected_activity]} summary")
+
+        if activity.empty:
+            st.info(
+                f"No {activity_labels[selected_activity].lower()} sessions "
+                "are available in the current history."
+            )
         else:
-            period_start = datetime.now(ZoneInfo("Europe/Berlin")).date() - timedelta(days=trend_days)
-            body_dates = pd.to_datetime(body["date"], errors="coerce").dt.date
-            trend = body[body_dates >= period_start].copy()
-            weight_tab, fat_tab = st.tabs(["Weight trend", "Body-fat trend"])
-            with weight_tab:
+            distance_valid = activity[
+                pd.to_numeric(activity["distance_km"], errors="coerce") > 0
+            ].copy()
+            duration_valid = activity[
+                pd.to_numeric(activity["duration_hours"], errors="coerce") > 0
+            ].copy()
+            performance_valid = activity[
+                (pd.to_numeric(activity["distance_km"], errors="coerce") > 0)
+                & (pd.to_numeric(activity["duration_hours"], errors="coerce") > 0)
+            ].copy()
+
+            if selected_activity == "run":
+                performance_valid["performance_value"] = (
+                    performance_valid["duration_hours"] * 60
+                    / performance_valid["distance_km"]
+                )
+                performance_label = "Pace (min/km)"
+                best_value = (
+                    performance_valid["performance_value"].min()
+                    if not performance_valid.empty
+                    else None
+                )
+                best_label = "Fastest pace"
+
+                def format_performance(value):
+                    if value is None or pd.isna(value):
+                        return "—"
+                    whole = int(value)
+                    seconds = int(round((float(value) - whole) * 60))
+                    if seconds == 60:
+                        whole += 1
+                        seconds = 0
+                    return f"{whole}:{seconds:02d} min/km"
+
+            elif selected_activity == "swim":
+                performance_valid["performance_value"] = (
+                    performance_valid["duration_hours"] * 60
+                    / (performance_valid["distance_km"] * 10)
+                )
+                performance_label = "Pace (min/100 m)"
+                best_value = (
+                    performance_valid["performance_value"].min()
+                    if not performance_valid.empty
+                    else None
+                )
+                best_label = "Fastest pace"
+
+                def format_performance(value):
+                    if value is None or pd.isna(value):
+                        return "—"
+                    whole = int(value)
+                    seconds = int(round((float(value) - whole) * 60))
+                    if seconds == 60:
+                        whole += 1
+                        seconds = 0
+                    return f"{whole}:{seconds:02d} /100 m"
+
+            else:
+                performance_valid["performance_value"] = (
+                    performance_valid["distance_km"]
+                    / performance_valid["duration_hours"]
+                )
+                performance_label = "Average speed (km/h)"
+                best_value = (
+                    performance_valid["performance_value"].max()
+                    if not performance_valid.empty
+                    else None
+                )
+                best_label = "Best avg speed"
+
+                def format_performance(value):
+                    if value is None or pd.isna(value):
+                        return "—"
+                    return f"{float(value):.1f} km/h"
+
+            longest_distance = (
+                float(distance_valid["distance_km"].max())
+                if not distance_valid.empty
+                else None
+            )
+            longest_duration = (
+                float(duration_valid["duration_hours"].max())
+                if not duration_valid.empty
+                else None
+            )
+            mean_hr = activity["average_hr"].dropna().mean()
+
+            e = st.columns(5)
+            e[0].metric("Sessions", len(activity))
+            e[1].metric(
+                "Longest distance",
+                f"{longest_distance:.2f} km"
+                if longest_distance is not None
+                else "—",
+            )
+            e[2].metric(
+                "Longest duration",
+                f"{longest_duration:.2f} h"
+                if longest_duration is not None
+                else "—",
+            )
+            e[3].metric(best_label, format_performance(best_value))
+            e[4].metric(
+                "Mean session HR",
+                f"{mean_hr:.0f} bpm" if pd.notna(mean_hr) else "—",
+            )
+
+            chart_left, chart_right = st.columns(2)
+
+            with chart_left:
+                st.markdown("**Distance progression**")
+                if distance_valid.empty:
+                    st.info("No valid distance values are available.")
+                else:
+                    distance_fig = px.line(
+                        distance_valid,
+                        x="date",
+                        y="distance_km",
+                        markers=True,
+                        hover_data=["display_name", "duration_hours", "average_hr"],
+                        labels={"date": "Date", "distance_km": "Distance (km)"},
+                    )
+                    distance_fig.update_layout(
+                        height=320,
+                        xaxis_tickformat="%d %b",
+                    )
+                    st.plotly_chart(distance_fig, use_container_width=True)
+
+                st.markdown(f"**{performance_label}**")
+                if performance_valid.empty:
+                    st.info("Distance and duration are required for this metric.")
+                else:
+                    performance_fig = px.line(
+                        performance_valid,
+                        x="date",
+                        y="performance_value",
+                        markers=True,
+                        hover_data=["distance_km", "duration_hours", "average_hr"],
+                        labels={
+                            "date": "Date",
+                            "performance_value": performance_label,
+                        },
+                    )
+                    performance_fig.update_layout(
+                        height=320,
+                        xaxis_tickformat="%d %b",
+                    )
+                    st.plotly_chart(performance_fig, use_container_width=True)
+
+            with chart_right:
+                st.markdown("**Session duration**")
+                if duration_valid.empty:
+                    st.info("No valid duration values are available.")
+                else:
+                    duration_fig = px.line(
+                        duration_valid,
+                        x="date",
+                        y="duration_hours",
+                        markers=True,
+                        hover_data=["display_name", "distance_km", "average_hr"],
+                        labels={"date": "Date", "duration_hours": "Hours"},
+                    )
+                    duration_fig.update_layout(
+                        height=320,
+                        xaxis_tickformat="%d %b",
+                    )
+                    st.plotly_chart(duration_fig, use_container_width=True)
+
+                st.markdown("**Average heart rate**")
+                hr_valid = activity.dropna(subset=["average_hr"])
+                if hr_valid.empty:
+                    st.info("No average-HR values are available.")
+                else:
+                    hr_fig = px.line(
+                        hr_valid,
+                        x="date",
+                        y="average_hr",
+                        markers=True,
+                        hover_data=["display_name", "distance_km", "duration_hours"],
+                        labels={"date": "Date", "average_hr": "Average HR (bpm)"},
+                    )
+                    hr_fig.update_layout(
+                        height=320,
+                        xaxis_tickformat="%d %b",
+                    )
+                    st.plotly_chart(hr_fig, use_container_width=True)
+
+            st.subheader(f"{activity_labels[selected_activity]} goal progress")
+            selected_goal_rows = goal_progress[
+                (goal_progress["category"] == "Endurance")
+                & goal_progress["goal"].astype(str).str.lower().str.startswith(
+                    selected_activity
+                )
+            ]
+            render_goal_table(selected_goal_rows)
+
+            if not distance_valid.empty:
+                longest_row = distance_valid.loc[
+                    distance_valid["distance_km"].idxmax()
+                ]
+                st.caption(
+                    "Longest recorded session: "
+                    f"{longest_row['distance_km']:.2f} km on "
+                    f"{pd.Timestamp(longest_row['date']).strftime('%d %b %Y')}."
+                )
+
+        st.subheader("All endurance-goal comparisons")
+        render_goal_table(goal_progress, "Endurance")
+
+        with st.expander("Reconciled run, swim and bike sessions"):
+            display_columns = [
+                column
+                for column in [
+                    "date",
+                    "goal_activity",
+                    "display_name",
+                    "distance_km",
+                    "duration_hours",
+                    "average_hr",
+                    "calories_kcal",
+                    "source_platform",
+                ]
+                if column in endurance.columns
+            ]
+            st.dataframe(
+                endurance[display_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        with st.expander("Endurance source status"):
+            st.dataframe(
+                pd.DataFrame(source_status),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+elif selected_section == "Body Composition & Nutrition":
+    st.header("Body composition and nutrition")
+
+    st.subheader("Google Health body composition")
+    latest_weight = latest_value(body, "weight_kg")
+    latest_fat = latest_value(body, "body_fat_pct")
+    latest_paired = body_calc.iloc[-1] if not body_calc.empty else None
+    bone_baseline = float(body_proxy["bone_mass_baseline_kg"])
+
+    b = st.columns(5)
+    b[0].metric(
+        "Weight",
+        f"{latest_weight:.2f} kg" if latest_weight is not None else "—",
+        f"{latest_weight - 90:+.1f} kg to <90"
+        if latest_weight is not None
+        else None,
+        delta_color="inverse",
+    )
+    b[1].metric(
+        "Body fat",
+        f"{latest_fat:.2f}%" if latest_fat is not None else "—",
+        f"{latest_fat - 15:+.1f} pp to <15%"
+        if latest_fat is not None
+        else None,
+        delta_color="inverse",
+    )
+    b[2].metric(
+        "Calculated fat mass",
+        f"{latest_paired['calculated_fat_mass_kg']:.2f} kg"
+        if latest_paired is not None
+        else "—",
+    )
+    b[3].metric(
+        "Estimated muscle mass",
+        f"{latest_paired['estimated_muscle_mass_kg']:.2f} kg"
+        if latest_paired is not None
+        else "—",
+    )
+    b[4].metric(
+        "Estimated muscle mass %",
+        f"{latest_paired['estimated_muscle_mass_pct_7d_median']:.2f}%"
+        if latest_paired is not None
+        else "—",
+        f"{latest_paired['estimated_muscle_mass_pct_7d_median'] - 80:+.1f} pp vs >80%"
+        if latest_paired is not None
+        else None,
+    )
+
+    if body.empty:
+        st.info("No body-composition data is available.")
+    else:
+        period_start = (
+            datetime.now(ZoneInfo("Europe/Berlin")).date()
+            - timedelta(days=trend_days)
+        )
+        body_dates = pd.to_datetime(body["date"], errors="coerce").dt.date
+        trend = body[body_dates >= period_start].copy()
+
+        calc_trend = body_calc.copy()
+        if not calc_trend.empty:
+            calc_dates = pd.to_datetime(
+                calc_trend["date"], errors="coerce"
+            ).dt.date
+            calc_trend = calc_trend[calc_dates >= period_start].copy()
+
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            st.markdown("**Weight / body-fat trend**")
+            trend_metric = st.radio(
+                "Body trend",
+                ["Weight", "Body fat"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="body_trend_metric",
+            )
+            if trend_metric == "Weight":
                 weight_trend = trend.dropna(subset=["weight_kg"])
                 if weight_trend.empty:
                     st.info("No weight measurements in this period.")
@@ -1661,12 +1985,22 @@ elif selected_section == "Body Composition & Nutrition":
                         x="date",
                         y="weight_kg",
                         markers=True,
-                        labels={"date": "Date", "weight_kg": "Weight (kg)"},
+                        labels={
+                            "date": "Date",
+                            "weight_kg": "Weight (kg)",
+                        },
                     )
-                    fig.add_hline(y=90, line_dash="dash", annotation_text="90 kg goal")
-                    fig.update_layout(height=340, xaxis_tickformat="%d %b")
+                    fig.add_hline(
+                        y=90,
+                        line_dash="dash",
+                        annotation_text="90 kg goal",
+                    )
+                    fig.update_layout(
+                        height=340,
+                        xaxis_tickformat="%d %b",
+                    )
                     st.plotly_chart(fig, use_container_width=True)
-            with fat_tab:
+            else:
                 fat_trend = trend.dropna(subset=["body_fat_pct"])
                 if fat_trend.empty:
                     st.info("No body-fat measurements in this period.")
@@ -1676,58 +2010,86 @@ elif selected_section == "Body Composition & Nutrition":
                         x="date",
                         y="body_fat_pct",
                         markers=True,
-                        labels={"date": "Date", "body_fat_pct": "Body fat (%)"},
+                        labels={
+                            "date": "Date",
+                            "body_fat_pct": "Body fat (%)",
+                        },
                     )
-                    fig.add_hline(y=15, line_dash="dash", annotation_text="15% goal")
-                    fig.update_layout(height=340, xaxis_tickformat="%d %b")
+                    fig.add_hline(
+                        y=15,
+                        line_dash="dash",
+                        annotation_text="15% goal",
+                    )
+                    fig.update_layout(
+                        height=340,
+                        xaxis_tickformat="%d %b",
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
+        with c2:
+            st.markdown("**Fat mass vs estimated muscle mass**")
+            if calc_trend.empty:
+                st.info("Paired weight/body-fat data is unavailable.")
+            else:
+                composition_long = calc_trend[
+                    [
+                        "date",
+                        "calculated_fat_mass_kg_7d_median",
+                        "estimated_muscle_mass_kg_7d_median",
+                    ]
+                ].melt(
+                    id_vars="date",
+                    var_name="metric",
+                    value_name="kg",
+                )
+                composition_long["metric"] = composition_long["metric"].map(
+                    {
+                        "calculated_fat_mass_kg_7d_median": "Fat mass — 7d median",
+                        "estimated_muscle_mass_kg_7d_median": "Estimated muscle mass — 7d median",
+                    }
+                )
+                fig = px.line(
+                    composition_long,
+                    x="date",
+                    y="kg",
+                    color="metric",
+                    labels={"date": "Date", "kg": "kg", "metric": "Metric"},
+                )
+                fig.update_layout(
+                    height=340,
+                    xaxis_tickformat="%d %b",
+                    legend_title_text="",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with c3:
+            st.markdown("**Estimated muscle-mass percentage**")
+            if calc_trend.empty:
+                st.info("Paired weight/body-fat data is unavailable.")
+            else:
+                mm_fig = px.line(
+                    calc_trend,
+                    x="date",
+                    y="estimated_muscle_mass_pct_7d_median",
+                    labels={
+                        "date": "Date",
+                        "estimated_muscle_mass_pct_7d_median": (
+                            "Estimated muscle mass — 7d median (%)"
+                        ),
+                    },
+                )
+                mm_fig.add_hline(
+                    y=80,
+                    line_dash="dash",
+                    annotation_text="MM >80% goal",
+                )
+                mm_fig.update_layout(
+                    height=340,
+                    xaxis_tickformat="%d %b",
+                )
+                st.plotly_chart(mm_fig, use_container_width=True)
+
         if not body_calc.empty:
-            mass_long = body_calc.melt(
-                id_vars="date",
-                value_vars=[
-                    "calculated_fat_mass_kg_7d_median",
-                    "estimated_muscle_mass_kg_7d_median",
-                ],
-                var_name="metric",
-                value_name="kg",
-            )
-            mass_long["metric"] = mass_long["metric"].map(
-                {
-                    "calculated_fat_mass_kg_7d_median": "Fat mass — 7d median",
-                    "estimated_muscle_mass_kg_7d_median": "Estimated muscle mass — 7d median",
-                }
-            )
-            fig = px.line(
-                mass_long,
-                x="date",
-                y="kg",
-                color="metric",
-                markers=True,
-            )
-            fig.update_layout(height=350, xaxis_tickformat="%d %b")
-            st.plotly_chart(fig, use_container_width=True)
-
-            mm_fig = px.line(
-                body_calc,
-                x="date",
-                y="estimated_muscle_mass_pct_7d_median",
-                markers=True,
-                labels={
-                    "date": "Date",
-                    "estimated_muscle_mass_pct_7d_median": (
-                        "Estimated muscle mass — 7d median (%)"
-                    ),
-                },
-            )
-            mm_fig.add_hline(
-                y=80,
-                line_dash="dash",
-                annotation_text="MM >80% goal",
-            )
-            mm_fig.update_layout(height=330, xaxis_tickformat="%d %b")
-            st.plotly_chart(mm_fig, use_container_width=True)
-
             latest_mm = float(
                 body_calc.iloc[-1]["estimated_muscle_mass_kg_7d_median"]
             )
@@ -1740,151 +2102,382 @@ elif selected_section == "Body Composition & Nutrition":
                     f"28-day estimated muscle-mass change: "
                     f"{latest_mm - earlier_mm:+.2f} kg."
                 )
-            st.caption(
-                f"Estimated muscle mass = weight − calculated fat mass − "
-                f"{bone_baseline:.2f} kg fixed bone-mass baseline. "
-                "Trends use a 7-day rolling median. "
-                "This is a Withings-compatible proxy, not a direct skeletal-muscle measurement."
-            )
 
-    with nutrition_right:
-        st.subheader("Nutrition adherence")
-        logged = nutrition[pd.to_numeric(nutrition.get("calories_kcal"), errors="coerce") > 0].copy() if not nutrition.empty else pd.DataFrame()
-        if logged.empty:
-            st.info("No nutrition data is available.")
-        else:
-            logged["date_only"] = pd.to_datetime(logged["date"], errors="coerce").dt.date
-            workout_dates = set(
-                pd.to_datetime(session_summary["start_time"], errors="coerce").dt.date
-            ) if not session_summary.empty else set()
-            logged["day_type"] = logged["date_only"].map(
-                lambda value: "Training day" if value in workout_dates else "Rest day"
-            )
-            recent = logged.tail(30)
-            seven = logged.tail(7)
-            n = st.columns(4)
-            n[0].metric("7-day calories", f"{seven['calories_kcal'].mean():,.0f}")
-            n[1].metric("7-day protein", f"{seven['protein_g'].mean():.0f} g")
-            protein_per_kg = seven["protein_g"].mean() / latest_weight if latest_weight else None
-            n[2].metric("Protein / kg BW", f"{protein_per_kg:.2f} g/kg" if protein_per_kg else "—")
-            n[3].metric("Logged days — last 30", len(recent))
+        st.caption(
+            f"Estimated muscle mass = weight − calculated fat mass − "
+            f"{bone_baseline:.2f} kg fixed bone-mass baseline. "
+            "Trends use a 7-day rolling median. "
+            "This is a Withings-compatible proxy, not a direct skeletal-muscle measurement."
+        )
 
+    st.subheader("Nutrition adherence")
+    logged = (
+        nutrition[
+            pd.to_numeric(
+                nutrition.get("calories_kcal"),
+                errors="coerce",
+            )
+            > 0
+        ].copy()
+        if not nutrition.empty
+        else pd.DataFrame()
+    )
+
+    if logged.empty:
+        st.info("No nutrition data is available.")
+    else:
+        logged["date_only"] = pd.to_datetime(
+            logged["date"], errors="coerce"
+        ).dt.date
+
+        strength_dates = (
+            set(
+                pd.to_datetime(
+                    session_summary["start_time"],
+                    errors="coerce",
+                ).dt.date.dropna()
+            )
+            if not session_summary.empty
+            else set()
+        )
+        endurance_dates = (
+            set(
+                pd.to_datetime(
+                    endurance["date"],
+                    errors="coerce",
+                ).dt.date.dropna()
+            )
+            if not endurance.empty
+            else set()
+        )
+
+        def nutrition_day_type(day):
+            has_strength = day in strength_dates
+            has_endurance = day in endurance_dates
+            if has_strength and has_endurance:
+                return "Strength + Endurance"
+            if has_strength:
+                return "Strength Training"
+            if has_endurance:
+                return "Endurance"
+            return "Rest Day"
+
+        day_order = [
+            "Strength Training",
+            "Endurance",
+            "Strength + Endurance",
+            "Rest Day",
+        ]
+        logged["day_type"] = logged["date_only"].map(nutrition_day_type)
+        logged["day_type"] = pd.Categorical(
+            logged["day_type"],
+            categories=day_order,
+            ordered=True,
+        )
+
+        recent = logged.sort_values("date_only").tail(30)
+        seven = logged.sort_values("date_only").tail(7)
+
+        n = st.columns(4)
+        n[0].metric(
+            "7-day calories",
+            f"{seven['calories_kcal'].mean():,.0f}",
+        )
+        n[1].metric(
+            "7-day protein",
+            f"{seven['protein_g'].mean():.0f} g",
+        )
+        protein_per_kg = (
+            seven["protein_g"].mean() / latest_weight
+            if latest_weight
+            else None
+        )
+        n[2].metric(
+            "Protein / kg BW",
+            f"{protein_per_kg:.2f} g/kg"
+            if protein_per_kg
+            else "—",
+        )
+        n[3].metric("Logged days — last 30", len(recent))
+
+        nutrition_chart, nutrition_summary = st.columns([2, 1])
+
+        with nutrition_chart:
             fig = px.bar(
                 recent,
                 x="date",
                 y="calories_kcal",
                 color="day_type",
                 hover_data=["protein_g", "carbs_g", "fat_g"],
-                labels={"date": "Date", "calories_kcal": "Calories"},
+                category_orders={"day_type": day_order},
+                labels={
+                    "date": "Date",
+                    "calories_kcal": "Calories",
+                    "day_type": "Day type",
+                },
             )
-            fig.update_layout(height=350, xaxis_tickformat="%d %b")
+            fig.update_layout(
+                height=380,
+                xaxis_tickformat="%d %b",
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-            comparison = recent.groupby("day_type")[["calories_kcal", "protein_g", "carbs_g", "fat_g"]].mean().round(1)
-            st.dataframe(comparison, use_container_width=True)
+        with nutrition_summary:
+            comparison = (
+                recent.groupby(
+                    "day_type",
+                    observed=True,
+                )[
+                    [
+                        "calories_kcal",
+                        "protein_g",
+                        "carbs_g",
+                        "fat_g",
+                    ]
+                ]
+                .mean()
+                .round(1)
+                .reindex(day_order)
+                .dropna(how="all")
+            )
+            st.markdown("**Average intake by day type**")
+            st.dataframe(
+                comparison,
+                use_container_width=True,
+            )
+            counts = (
+                recent.groupby("day_type", observed=True)
+                .size()
+                .reindex(day_order)
+                .fillna(0)
+                .astype(int)
+                .rename("days")
+            )
+            st.markdown("**Logged days by type**")
+            st.dataframe(
+                counts.to_frame(),
+                use_container_width=True,
+            )
 
-            excluded = int(pd.to_numeric(recent.get("excluded_fitbit_summary_records"), errors="coerce").fillna(0).sum())
-            if excluded:
-                st.caption(f"Excluded {excluded} overlapping Fitbit nutrition summary record(s) in this period.")
+        st.caption(
+            "Day classification: Strength Training = Hevy workout; "
+            "Endurance = reconciled run/swim/bike session; "
+            "Strength + Endurance = both on the same calendar day; "
+            "Rest Day = neither."
+        )
+
+        excluded = int(
+            pd.to_numeric(
+                recent.get("excluded_fitbit_summary_records"),
+                errors="coerce",
+            )
+            .fillna(0)
+            .sum()
+        )
+        if excluded:
+            st.caption(
+                f"Excluded {excluded} overlapping Fitbit nutrition "
+                "summary record(s) in this period."
+            )
 
     st.subheader("Body-composition goals")
     render_goal_table(goal_progress, "Body Composition")
 
 elif selected_section == "Recovery & Data Quality":
-    st.header("Recovery, endurance goals and data quality")
+    st.header("Recovery and data quality")
+
     rec_left, sleep_right = st.columns(2)
+
     with rec_left:
         st.subheader("Recovery versus 28-day baseline")
         if recovery.empty:
             st.info("No recovery data available.")
         else:
             recent = recovery.tail(60).copy()
-            recent["rhr_28d"] = pd.to_numeric(recent["resting_hr"], errors="coerce").rolling(28, min_periods=7).mean()
-            recent["hrv_28d"] = pd.to_numeric(recent["hrv_ms"], errors="coerce").rolling(28, min_periods=7).mean()
+            recent["rhr_28d"] = pd.to_numeric(
+                recent["resting_hr"],
+                errors="coerce",
+            ).rolling(28, min_periods=7).mean()
+            recent["hrv_28d"] = pd.to_numeric(
+                recent["hrv_ms"],
+                errors="coerce",
+            ).rolling(28, min_periods=7).mean()
+
             rhr_fig = px.line(
                 recent,
                 x="date",
                 y=["resting_hr", "rhr_28d"],
-                labels={"date": "Date", "value": "Resting HR", "variable": "Series"},
+                labels={
+                    "date": "Date",
+                    "value": "Resting HR",
+                    "variable": "Series",
+                },
             )
-            rhr_fig.update_layout(height=300, xaxis_tickformat="%d %b")
+            rhr_fig.update_layout(
+                height=300,
+                xaxis_tickformat="%d %b",
+            )
             st.plotly_chart(rhr_fig, use_container_width=True)
+
             hrv_fig = px.line(
                 recent,
                 x="date",
                 y=["hrv_ms", "hrv_28d"],
-                labels={"date": "Date", "value": "HRV (ms)", "variable": "Series"},
+                labels={
+                    "date": "Date",
+                    "value": "HRV (ms)",
+                    "variable": "Series",
+                },
             )
-            hrv_fig.update_layout(height=300, xaxis_tickformat="%d %b")
+            hrv_fig.update_layout(
+                height=300,
+                xaxis_tickformat="%d %b",
+            )
             st.plotly_chart(hrv_fig, use_container_width=True)
+
     with sleep_right:
         st.subheader("Sleep consistency")
-        main_sleep = sleep.dropna(subset=["sleep_hours"]).tail(60).copy() if not sleep.empty else pd.DataFrame()
+        main_sleep = (
+            sleep.dropna(subset=["sleep_hours"]).tail(60).copy()
+            if not sleep.empty
+            else pd.DataFrame()
+        )
         if main_sleep.empty:
             st.info("No sleep data available.")
         else:
-            main_sleep["sleep_28d"] = pd.to_numeric(main_sleep["sleep_hours"], errors="coerce").rolling(28, min_periods=7).mean()
+            main_sleep["sleep_28d"] = pd.to_numeric(
+                main_sleep["sleep_hours"],
+                errors="coerce",
+            ).rolling(28, min_periods=7).mean()
+
             fig = px.line(
                 main_sleep,
                 x="date",
                 y=["sleep_hours", "sleep_28d"],
-                labels={"date": "Wake date", "value": "Hours", "variable": "Series"},
+                labels={
+                    "date": "Wake date",
+                    "value": "Hours",
+                    "variable": "Series",
+                },
             )
-            fig.update_layout(height=300, xaxis_tickformat="%d %b")
-            st.plotly_chart(fig, use_container_width=True)
-            stages = main_sleep.tail(30)[["date", "deep_minutes", "rem_minutes", "light_minutes"]].melt(
-                id_vars="date", var_name="stage", value_name="minutes"
+            fig.update_layout(
+                height=300,
+                xaxis_tickformat="%d %b",
             )
-            stages["stage"] = stages["stage"].map(
-                {"deep_minutes": "Deep", "rem_minutes": "REM", "light_minutes": "Light"}
-            )
-            fig = px.bar(stages, x="date", y="minutes", color="stage")
-            fig.update_layout(barmode="stack", height=300, xaxis_tickformat="%d %b")
             st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Endurance-goal comparisons")
-    render_goal_table(goal_progress, "Endurance")
-    if not endurance.empty:
-        with st.expander("Reconciled run, swim and bike sessions"):
-            st.dataframe(
-                endurance[
-                    [
-                        "date", "goal_activity", "display_name", "distance_km",
-                        "duration_hours", "average_hr", "source_platform",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
+            stages = main_sleep.tail(30)[
+                ["date", "deep_minutes", "rem_minutes", "light_minutes"]
+            ].melt(
+                id_vars="date",
+                var_name="stage",
+                value_name="minutes",
             )
+            stages["stage"] = stages["stage"].map(
+                {
+                    "deep_minutes": "Deep",
+                    "rem_minutes": "REM",
+                    "light_minutes": "Light",
+                }
+            )
+            fig = px.bar(
+                stages,
+                x="date",
+                y="minutes",
+                color="stage",
+            )
+            fig.update_layout(
+                barmode="stack",
+                height=300,
+                xaxis_tickformat="%d %b",
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Data quality")
     quality_rows = [
-        source_quality_row("Steps", health_steps, expected_days=14),
-        source_quality_row("Recovery", recovery, expected_days=14),
-        source_quality_row("Sleep", sleep, expected_days=14),
-        source_quality_row("Body composition", body),
-        source_quality_row("Nutrition", nutrition, expected_days=14),
-        source_quality_row("Endurance sessions", endurance),
-        source_quality_row("Hevy sessions", session_summary, date_column="start_time"),
+        source_quality_row(
+            "Steps",
+            health_steps,
+            expected_days=14,
+        ),
+        source_quality_row(
+            "Recovery",
+            recovery,
+            expected_days=14,
+        ),
+        source_quality_row(
+            "Sleep",
+            sleep,
+            expected_days=14,
+        ),
+        source_quality_row(
+            "Hevy sessions",
+            session_summary,
+            date_column="start_time",
+        ),
     ]
-    st.dataframe(pd.DataFrame(quality_rows), use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame(quality_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption(
+        "Endurance source status now lives in the Endurance section. "
+        "Body-composition and nutrition source status are loaded with their own section."
+    )
 
     if not session_summary.empty:
         q = st.columns(4)
-        session_rpe_pct = session_summary["session_rpe"].notna().mean() * 100
-        eligible = pd.to_numeric(session_summary["set_rpe_eligible"], errors="coerce").sum()
-        logged_sets = pd.to_numeric(session_summary["set_rpe_logged"], errors="coerce").sum()
-        set_rpe_pct = logged_sets / eligible * 100 if eligible else 0
-        warmup_sessions = (pd.to_numeric(session_summary["warmup_sets"], errors="coerce") > 0).mean() * 100
-        q[0].metric("Session-RPE coverage", f"{session_rpe_pct:.0f}%")
-        q[1].metric("Set-RPE coverage", f"{set_rpe_pct:.0f}%")
-        q[2].metric("Sessions with warm-ups marked", f"{warmup_sessions:.0f}%")
-        q[3].metric("Hevy sessions loaded", len(session_summary))
+        session_rpe_pct = (
+            session_summary["session_rpe"].notna().mean() * 100
+        )
+        eligible = pd.to_numeric(
+            session_summary["set_rpe_eligible"],
+            errors="coerce",
+        ).sum()
+        logged_sets = pd.to_numeric(
+            session_summary["set_rpe_logged"],
+            errors="coerce",
+        ).sum()
+        set_rpe_pct = (
+            logged_sets / eligible * 100
+            if eligible
+            else 0
+        )
+        warmup_sessions = (
+            pd.to_numeric(
+                session_summary["warmup_sets"],
+                errors="coerce",
+            )
+            > 0
+        ).mean() * 100
+
+        q[0].metric(
+            "Session-RPE coverage",
+            f"{session_rpe_pct:.0f}%",
+        )
+        q[1].metric(
+            "Set-RPE coverage",
+            f"{set_rpe_pct:.0f}%",
+        )
+        q[2].metric(
+            "Sessions with warm-ups marked",
+            f"{warmup_sessions:.0f}%",
+        )
+        q[3].metric(
+            "Hevy sessions loaded",
+            len(session_summary),
+        )
 
     with st.expander("Source errors and diagnostics"):
-        st.dataframe(pd.DataFrame(source_status), use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(source_status),
+            use_container_width=True,
+            hide_index=True,
+        )
         st.caption(
-            "A missing day can reflect no measurement, an incomplete sync, or a legitimately unlogged day. Today is excluded from complete-day expectations."
+            "A missing day can reflect no measurement, an incomplete sync, "
+            "or a legitimately unlogged day. Today is excluded from complete-day expectations."
         )
 
 st.divider()
