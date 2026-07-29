@@ -1,0 +1,17 @@
+# Credentials and local OAuth state
+.streamlit/secrets.toml
+private/
+client_secret.json
+streamlit_cloud_secrets.toml
+*token*.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Local exports and diagnostics
+*.zip
+*_check/
+*_inventory/
+unified_daily_dataset/
+trainer_review_deploy/
