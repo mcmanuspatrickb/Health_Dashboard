@@ -50,9 +50,9 @@ DEFAULT_ALIAS_RULES = [
     },
     {
         "goal_id": "row",
-        "pattern": r"(?i)\b(seated\s*cable\s*row|cable\s*row(?:\s*\(seated\))?|seated\s*row\s*\(cable\))\b",
+        "pattern": r"(?i)\b(cable\s*seated\s*row|seated\s*cable\s*row|cable\s*row(?:\s*\(seated\))?|seated\s*row\s*\(cable\))\b",
         "exclude_pattern": r"(?i)\b(single[ -]?arm|one[ -]?arm|unilateral)\b",
-        "notes": "Bilateral seated cable-row variations only; excludes unilateral/single-arm rows.",
+        "notes": "Cable Seated Row / bilateral seated cable-row variations only; excludes unilateral/single-arm rows.",
     },
     {
         "goal_id": "overhead_press",
