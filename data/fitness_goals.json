@@ -5,8 +5,7 @@
     "Estimated 1RM uses the Epley formula for loaded working sets of 1–12 reps.",
     "Farmer-carry weight is assumed to be entered per hand in Hevy.",
     "MM means estimated muscle-mass percentage.",
-    "Estimated muscle mass uses a fixed 3.87 kg bone-mass baseline from the latest direct Withings measurement.",
-    "Muscle retention uses a 74.28 kg baseline and a 97% reference target."
+    "Estimated muscle mass uses a fixed 3.87 kg bone-mass baseline from the latest direct Withings measurement."
   ],
   "goals": [
     {
@@ -41,17 +40,6 @@
       "unit": "%",
       "target_display": ">80%",
       "note": "Withings-compatible proxy using Google Health weight/body fat and fixed 3.87 kg bone mass."
-    },
-    {
-      "id": "muscle_retention",
-      "category": "Body Composition",
-      "goal": "Estimated muscle retention",
-      "metric": "muscle_retention_pct",
-      "target": 97,
-      "direction": "minimum",
-      "unit": "% of baseline",
-      "target_display": "≥97% of 74.28 kg baseline",
-      "note": "Protects against percentage improvement caused only by weight loss; proxy baseline is the latest direct Withings muscle mass."
     },
     {
       "id": "back_squat",
@@ -321,8 +309,6 @@
   "body_composition_proxy": {
     "method": "withings_compatible_fixed_bone_mass",
     "bone_mass_baseline_kg": 3.87,
-    "muscle_mass_baseline_kg": 74.28,
-    "muscle_retention_target_pct": 97,
     "notes": [
       "Estimated muscle mass = weight - estimated fat mass - fixed bone-mass baseline.",
       "Estimated fat mass = weight x body-fat percentage.",
