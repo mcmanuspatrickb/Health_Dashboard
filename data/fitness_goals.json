@@ -90,12 +90,12 @@
       "id": "pushups",
       "category": "Strength",
       "goal": "Push-ups in one minute",
-      "metric": "best_one_minute_reps",
+      "metric": "best_reps",
       "target": 40,
       "direction": "minimum",
       "unit": "reps",
       "target_display": "40+ reps / 1 min",
-      "note": "Requires Hevy set duration near one minute."
+      "note": "Standard push-up entries are assumed to represent the one-minute test; set duration is not required."
     },
     {
       "id": "bar_hang",
@@ -111,13 +111,13 @@
     {
       "id": "row",
       "category": "Strength",
-      "goal": "Barbell row — 3RM reference",
+      "goal": "Seated cable row — 3RM reference",
       "metric": "best_3_to_5_weight_kg",
       "target": 110,
       "direction": "minimum",
       "unit": "kg",
       "target_display": "110 kg × 3",
-      "note": "Dashboard uses the best load completed for 3–5 reps."
+      "note": "Dashboard uses the best seated cable-row load completed for 3–5 reps."
     },
     {
       "id": "overhead_press",
