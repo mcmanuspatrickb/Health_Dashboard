@@ -5,7 +5,7 @@ deadlift,(?i)\b(deadlift|conventional\s*deadlift|sumo\s*deadlift)\b,(?i)\b(roman
 pull_ups,(?i)\b(pull[ -]?ups?|chin[ -]?ups?)\b,,Bodyweight or weighted pull-up/chin-up sets.
 pushups,(?i)\b(push[ -]?ups?)\b,(?i)\b(clap|plyo|plyometric|weighted|incline|decline)\b,Standard push-ups; each recorded standard push-up set is assumed to represent the one-minute test.
 bar_hang,(?i)\b(dead\s*hang|bar\s*hang|hang\s*hold)\b,,Uses recorded set duration.
-row,(?i)\b(seated\s*cable\s*row|cable\s*row(?:\s*\(seated\))?|seated\s*row\s*\(cable\))\b,(?i)\b(single[ -]?arm|one[ -]?arm|unilateral)\b,Bilateral seated cable-row variations only; excludes unilateral/single-arm rows.
+row,(?i)\b(cable\s*seated\s*row|seated\s*cable\s*row|cable\s*row(?:\s*\(seated\))?|seated\s*row\s*\(cable\))\b,(?i)\b(single[ -]?arm|one[ -]?arm|unilateral)\b,Cable Seated Row / bilateral seated cable-row variations only; excludes unilateral/single-arm rows.
 overhead_press,(?i)\b(overhead\s*press|military\s*press|shoulder\s*press\s*\(barbell\)|barbell\s*overhead)\b,(?i)\b(dumbbell|machine|smith|seated)\b,Standing barbell overhead press preferred.
 farmer_carry,(?i)\b(farmer'?s?\s*(carry|walk)|farmers?\s*(carry|walk))\b,,Recorded weight is assumed to be per hand.
 plank,(?i)\bplank\b,(?i)\b(side|copenhagen|high|weighted|pull.through)\b,Standard front plank; uses recorded set duration.

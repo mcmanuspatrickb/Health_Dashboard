@@ -111,13 +111,13 @@
     {
       "id": "row",
       "category": "Strength",
-      "goal": "Seated cable row — 3RM reference",
+      "goal": "Cable Seated Row — 3RM reference",
       "metric": "best_3_to_5_weight_kg",
       "target": 110,
       "direction": "minimum",
       "unit": "kg",
       "target_display": "110 kg × 3",
-      "note": "Dashboard uses the best seated cable-row load completed for 3–5 reps."
+      "note": "Dashboard uses the best Cable Seated Row load completed for 3–5 reps."
     },
     {
       "id": "overhead_press",
