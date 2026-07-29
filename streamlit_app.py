@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import math
 from pathlib import Path
@@ -983,7 +985,7 @@ with st.sidebar:
         "are stored in data/goal_exercise_aliases.csv."
     )
     st.caption(
-        "V10: sections remain lazy-loaded; endurance now has its own progress view."
+        "V11: Overall Trends combines body-composition charts into two selectable views."
     )
 
 source_status = []
@@ -1964,130 +1966,304 @@ elif selected_section == "Body Composition & Nutrition":
             ).dt.date
             calc_trend = calc_trend[calc_dates >= period_start].copy()
 
-        c1, c2, c3 = st.columns(3)
+        st.subheader("Overall Trends")
 
-        with c1:
-            st.markdown("**Weight / body-fat trend**")
-            trend_metric = st.radio(
-                "Body trend",
-                ["Weight", "Body fat"],
+        trend_options = [
+            "Chart 1: Weight / Body fat",
+            "Chart 2: Fat mass / Est muscle mass / Est muscle mass %",
+        ]
+        if hasattr(st, "segmented_control"):
+            selected_trend_chart = st.segmented_control(
+                "Overall trend view",
+                options=trend_options,
+                default=trend_options[0],
+                label_visibility="collapsed",
+                key="overall_trend_view",
+            )
+        else:
+            selected_trend_chart = st.radio(
+                "Overall trend view",
+                options=trend_options,
                 horizontal=True,
                 label_visibility="collapsed",
-                key="body_trend_metric",
+                key="overall_trend_view",
             )
-            if trend_metric == "Weight":
-                weight_trend = trend.dropna(subset=["weight_kg"])
-                if weight_trend.empty:
-                    st.info("No weight measurements in this period.")
-                else:
-                    fig = px.line(
-                        weight_trend,
-                        x="date",
-                        y="weight_kg",
-                        markers=True,
-                        labels={
-                            "date": "Date",
-                            "weight_kg": "Weight (kg)",
-                        },
-                    )
-                    fig.add_hline(
-                        y=90,
-                        line_dash="dash",
-                        annotation_text="90 kg goal",
-                    )
-                    fig.update_layout(
-                        height=340,
-                        xaxis_tickformat="%d %b",
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                fat_trend = trend.dropna(subset=["body_fat_pct"])
-                if fat_trend.empty:
-                    st.info("No body-fat measurements in this period.")
-                else:
-                    fig = px.line(
-                        fat_trend,
-                        x="date",
-                        y="body_fat_pct",
-                        markers=True,
-                        labels={
-                            "date": "Date",
-                            "body_fat_pct": "Body fat (%)",
-                        },
-                    )
-                    fig.add_hline(
-                        y=15,
-                        line_dash="dash",
-                        annotation_text="15% goal",
-                    )
-                    fig.update_layout(
-                        height=340,
-                        xaxis_tickformat="%d %b",
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
 
-        with c2:
-            st.markdown("**Fat mass vs estimated muscle mass**")
-            if calc_trend.empty:
-                st.info("Paired weight/body-fat data is unavailable.")
-            else:
-                composition_long = calc_trend[
-                    [
-                        "date",
-                        "calculated_fat_mass_kg_7d_median",
-                        "estimated_muscle_mass_kg_7d_median",
-                    ]
-                ].melt(
-                    id_vars="date",
-                    var_name="metric",
-                    value_name="kg",
-                )
-                composition_long["metric"] = composition_long["metric"].map(
-                    {
-                        "calculated_fat_mass_kg_7d_median": "Fat mass — 7d median",
-                        "estimated_muscle_mass_kg_7d_median": "Estimated muscle mass — 7d median",
-                    }
-                )
-                fig = px.line(
-                    composition_long,
-                    x="date",
-                    y="kg",
-                    color="metric",
-                    labels={"date": "Date", "kg": "kg", "metric": "Metric"},
-                )
-                fig.update_layout(
-                    height=340,
-                    xaxis_tickformat="%d %b",
-                    legend_title_text="",
-                )
-                st.plotly_chart(fig, use_container_width=True)
+        if not selected_trend_chart:
+            selected_trend_chart = trend_options[0]
 
-        with c3:
-            st.markdown("**Estimated muscle-mass percentage**")
-            if calc_trend.empty:
-                st.info("Paired weight/body-fat data is unavailable.")
+        if selected_trend_chart == trend_options[0]:
+            st.caption(
+                "Weight uses the left axis; body fat uses the right axis. "
+                "Goal lines show 90 kg and 15% body fat."
+            )
+
+            weight_view = trend.dropna(subset=["weight_kg"])[
+                ["date", "weight_kg"]
+            ].copy()
+            fat_view = trend.dropna(subset=["body_fat_pct"])[
+                ["date", "body_fat_pct"]
+            ].copy()
+
+            if weight_view.empty and fat_view.empty:
+                st.info(
+                    "No weight or body-fat measurements are available "
+                    "for the selected period."
+                )
             else:
-                mm_fig = px.line(
-                    calc_trend,
-                    x="date",
-                    y="estimated_muscle_mass_pct_7d_median",
-                    labels={
-                        "date": "Date",
-                        "estimated_muscle_mass_pct_7d_median": (
-                            "Estimated muscle mass — 7d median (%)"
+                overall_fig = make_subplots(
+                    specs=[[{"secondary_y": True}]]
+                )
+
+                if not weight_view.empty:
+                    overall_fig.add_trace(
+                        go.Scatter(
+                            x=weight_view["date"],
+                            y=weight_view["weight_kg"],
+                            mode="lines+markers",
+                            name="Weight (kg)",
+                            hovertemplate=(
+                                "%{x|%d %b %Y}<br>"
+                                "Weight: %{y:.2f} kg<extra></extra>"
+                            ),
                         ),
+                        secondary_y=False,
+                    )
+
+                if not fat_view.empty:
+                    overall_fig.add_trace(
+                        go.Scatter(
+                            x=fat_view["date"],
+                            y=fat_view["body_fat_pct"],
+                            mode="lines+markers",
+                            name="Body fat (%)",
+                            hovertemplate=(
+                                "%{x|%d %b %Y}<br>"
+                                "Body fat: %{y:.2f}%<extra></extra>"
+                            ),
+                        ),
+                        secondary_y=True,
+                    )
+
+                # Primary-axis goal.
+                overall_fig.add_shape(
+                    type="line",
+                    xref="paper",
+                    x0=0,
+                    x1=1,
+                    yref="y",
+                    y0=90,
+                    y1=90,
+                    line={"dash": "dash", "width": 2},
+                )
+                overall_fig.add_annotation(
+                    x=1,
+                    xref="paper",
+                    y=90,
+                    yref="y",
+                    text="90 kg goal",
+                    showarrow=False,
+                    xanchor="right",
+                    yanchor="bottom",
+                )
+
+                # Secondary-axis body-fat goal.
+                overall_fig.add_shape(
+                    type="line",
+                    xref="paper",
+                    x0=0,
+                    x1=1,
+                    yref="y2",
+                    y0=15,
+                    y1=15,
+                    line={"dash": "dash", "width": 2},
+                )
+                overall_fig.add_annotation(
+                    x=1,
+                    xref="paper",
+                    y=15,
+                    yref="y2",
+                    text="15% body-fat goal",
+                    showarrow=False,
+                    xanchor="right",
+                    yanchor="bottom",
+                )
+
+                overall_fig.update_xaxes(
+                    title_text="Date",
+                    tickformat="%d %b",
+                )
+                overall_fig.update_yaxes(
+                    title_text="Weight (kg)",
+                    secondary_y=False,
+                )
+                overall_fig.update_yaxes(
+                    title_text="Body fat (%)",
+                    secondary_y=True,
+                )
+                overall_fig.update_layout(
+                    height=520,
+                    margin={"l": 55, "r": 55, "t": 55, "b": 55},
+                    legend={
+                        "orientation": "h",
+                        "yanchor": "bottom",
+                        "y": 1.02,
+                        "xanchor": "center",
+                        "x": 0.5,
                     },
+                    hovermode="x unified",
                 )
-                mm_fig.add_hline(
+                st.plotly_chart(
+                    overall_fig,
+                    use_container_width=True,
+                )
+
+                summary_parts = []
+                if len(weight_view) >= 2:
+                    first_weight = float(weight_view.iloc[0]["weight_kg"])
+                    last_weight = float(weight_view.iloc[-1]["weight_kg"])
+                    weight_change = last_weight - first_weight
+                    pct_change = (
+                        weight_change / first_weight * 100
+                        if first_weight
+                        else None
+                    )
+                    summary_parts.append(
+                        "weight "
+                        f"{weight_change:+.1f} kg"
+                        + (
+                            f" ({pct_change:+.1f}%)"
+                            if pct_change is not None
+                            else ""
+                        )
+                    )
+                if len(fat_view) >= 2:
+                    first_fat = float(fat_view.iloc[0]["body_fat_pct"])
+                    last_fat = float(fat_view.iloc[-1]["body_fat_pct"])
+                    fat_change = last_fat - first_fat
+                    summary_parts.append(
+                        f"body fat {fat_change:+.1f} pp"
+                    )
+                if summary_parts:
+                    st.caption(
+                        "Over the selected period: "
+                        + ", ".join(summary_parts)
+                        + "."
+                    )
+
+        else:
+            st.caption(
+                "Fat mass and estimated muscle mass use the left axis (kg); "
+                "estimated muscle-mass percentage uses the right axis (%)."
+            )
+
+            if calc_trend.empty:
+                st.info(
+                    "Paired weight/body-fat data is unavailable for "
+                    "the selected period."
+                )
+            else:
+                composition_fig = make_subplots(
+                    specs=[[{"secondary_y": True}]]
+                )
+
+                composition_fig.add_trace(
+                    go.Scatter(
+                        x=calc_trend["date"],
+                        y=calc_trend[
+                            "calculated_fat_mass_kg_7d_median"
+                        ],
+                        mode="lines",
+                        name="Fat mass — 7d median",
+                        hovertemplate=(
+                            "%{x|%d %b %Y}<br>"
+                            "Fat mass: %{y:.2f} kg<extra></extra>"
+                        ),
+                    ),
+                    secondary_y=False,
+                )
+                composition_fig.add_trace(
+                    go.Scatter(
+                        x=calc_trend["date"],
+                        y=calc_trend[
+                            "estimated_muscle_mass_kg_7d_median"
+                        ],
+                        mode="lines",
+                        name="Estimated muscle mass — 7d median",
+                        hovertemplate=(
+                            "%{x|%d %b %Y}<br>"
+                            "Estimated muscle mass: %{y:.2f} kg"
+                            "<extra></extra>"
+                        ),
+                    ),
+                    secondary_y=False,
+                )
+                composition_fig.add_trace(
+                    go.Scatter(
+                        x=calc_trend["date"],
+                        y=calc_trend[
+                            "estimated_muscle_mass_pct_7d_median"
+                        ],
+                        mode="lines",
+                        name="Estimated muscle mass % — 7d median",
+                        hovertemplate=(
+                            "%{x|%d %b %Y}<br>"
+                            "Estimated muscle mass: %{y:.2f}%"
+                            "<extra></extra>"
+                        ),
+                    ),
+                    secondary_y=True,
+                )
+
+                composition_fig.add_shape(
+                    type="line",
+                    xref="paper",
+                    x0=0,
+                    x1=1,
+                    yref="y2",
+                    y0=80,
+                    y1=80,
+                    line={"dash": "dash", "width": 2},
+                )
+                composition_fig.add_annotation(
+                    x=1,
+                    xref="paper",
                     y=80,
-                    line_dash="dash",
-                    annotation_text="MM >80% goal",
+                    yref="y2",
+                    text="MM >80% goal",
+                    showarrow=False,
+                    xanchor="right",
+                    yanchor="bottom",
                 )
-                mm_fig.update_layout(
-                    height=340,
-                    xaxis_tickformat="%d %b",
+
+                composition_fig.update_xaxes(
+                    title_text="Date",
+                    tickformat="%d %b",
                 )
-                st.plotly_chart(mm_fig, use_container_width=True)
+                composition_fig.update_yaxes(
+                    title_text="Fat / estimated muscle mass (kg)",
+                    secondary_y=False,
+                )
+                composition_fig.update_yaxes(
+                    title_text="Estimated muscle mass (%)",
+                    secondary_y=True,
+                )
+                composition_fig.update_layout(
+                    height=520,
+                    margin={"l": 55, "r": 55, "t": 55, "b": 55},
+                    legend={
+                        "orientation": "h",
+                        "yanchor": "bottom",
+                        "y": 1.02,
+                        "xanchor": "center",
+                        "x": 0.5,
+                    },
+                    hovermode="x unified",
+                )
+                st.plotly_chart(
+                    composition_fig,
+                    use_container_width=True,
+                )
 
         if not body_calc.empty:
             latest_mm = float(
