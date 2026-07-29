@@ -51,8 +51,8 @@ def get_secret(name: str, default=None):
         return default
 
 
-@st.cache_data(ttl=14400, show_spinner=False)
-def fetch_hevy_workouts(api_key: str, page_size: int = 50, max_pages: int = 10):
+@st.cache_data(ttl=3600)
+def fetch_hevy_workouts(api_key: str, page_size: int = 10, max_pages: int = 10):
     headers = {
         "accept": "application/json",
         "api-key": api_key
@@ -388,7 +388,7 @@ def get_selected_exercise_from_chart(event):
     return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_google_health_steps(days: int = 14) -> pd.DataFrame:
     client = GoogleHealthClient()
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
@@ -397,28 +397,28 @@ def load_google_health_steps(days: int = 14) -> pd.DataFrame:
     return load_steps(client, start_date, end_date)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_google_health_recovery(days: int = 30) -> pd.DataFrame:
     client = GoogleHealthClient()
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
     return load_recovery(client, today - timedelta(days=days), today)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_google_health_body(days: int = 30) -> pd.DataFrame:
     client = GoogleHealthClient()
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
     return load_body(client, today - timedelta(days=days), today)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_google_health_sleep(days: int = 30) -> pd.DataFrame:
     client = GoogleHealthClient()
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
     return load_sleep(client, today - timedelta(days=days), today)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_google_health_nutrition(days: int = 30) -> pd.DataFrame:
     client = GoogleHealthClient()
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
@@ -426,7 +426,7 @@ def load_google_health_nutrition(days: int = 30) -> pd.DataFrame:
     return load_nutrition(client, today - timedelta(days=days), end_date)
 
 
-@st.cache_data(ttl=14400, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def load_workout_heart_rate_analysis(
     start_time_iso: str,
     end_time_iso: str,
@@ -535,7 +535,7 @@ def _local_timestamp(value):
     return timestamp.tz_convert("Europe/Berlin")
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_google_health_endurance_sessions(days: int = 730) -> pd.DataFrame:
     """Load run, swim and bike sessions for endurance-goal comparison."""
     client = GoogleHealthClient()
@@ -957,9 +957,8 @@ with st.sidebar:
         "API page size",
         min_value=1,
         max_value=50,
-        value=50,
+        value=10,
         step=1,
-        help="50 reduces Hevy API round-trips while returning the same workout history.",
     )
     max_pages = st.number_input(
         "Max Hevy API pages",
@@ -982,9 +981,6 @@ with st.sidebar:
         "Goals are stored in data/fitness_goals.json. Exercise matching rules "
         "are stored in data/goal_exercise_aliases.csv."
     )
-    st.caption(
-        "V09 performance mode: only the selected dashboard section is loaded."
-    )
 
 source_status = []
 df, loaded_from = load_data(
@@ -1000,175 +996,73 @@ source_status.append(
     }
 )
 
+health_steps = safe_frame(
+    "Google Health steps",
+    lambda: load_google_health_steps(days=90),
+    source_status,
+)
+recovery = safe_frame(
+    "Google Health recovery",
+    lambda: load_google_health_recovery(days=90),
+    source_status,
+)
+sleep = safe_frame(
+    "Google Health sleep",
+    lambda: load_google_health_sleep(days=90),
+    source_status,
+)
+body = safe_frame(
+    "Google Health body composition",
+    lambda: load_google_health_body(days=365),
+    source_status,
+)
+nutrition = safe_frame(
+    "Cronometer nutrition",
+    lambda: load_google_health_nutrition(days=90),
+    source_status,
+)
+endurance = safe_frame(
+    "Google Health endurance sessions",
+    lambda: load_google_health_endurance_sessions(days=730),
+    source_status,
+)
+
 if df.empty:
     st.error(
-        "No Hevy data loaded. Check HEVY_API_KEY or increase Max Hevy API pages."
+        "No Hevy data loaded. Check HEVY_API_KEY, increase Max Hevy API pages, "
+        "or upload a CSV."
     )
     st.stop()
 
-# Lightweight Hevy summaries are shared across views.
 session_summary = build_session_summary(df)
+exercise_history = build_exercise_history(df)
+performance_history = build_exercise_performance_history(df)
 goals = load_goals(GOALS_PATH)
 body_proxy = load_body_composition_proxy(GOALS_PATH)
 alias_rules = load_alias_rules(GOAL_ALIASES_PATH)
+goal_progress = build_goal_progress(
+    goals,
+    body,
+    df,
+    endurance,
+    alias_rules,
+    proxy_config=body_proxy,
+)
+body_calc = prepare_body_calculations(body, body_proxy)
 
 st.caption(f"Hevy loaded from **{loaded_from}** · Today is treated as a partial day.")
 
-SECTION_OPTIONS = [
-    "Overview & Goals",
-    "Workout Review",
-    "Strength Progress",
-    "Body Composition & Nutrition",
-    "Recovery & Data Quality",
-]
-selected_section = st.radio(
-    "Dashboard section",
-    SECTION_OPTIONS,
-    horizontal=True,
-    label_visibility="collapsed",
-    key="dashboard_section",
+overview_tab, workout_tab, strength_tab, body_tab, recovery_tab = st.tabs(
+    [
+        "Overview & Goals",
+        "Workout Review",
+        "Strength Progress",
+        "Body Composition & Nutrition",
+        "Recovery & Data Quality",
+    ]
 )
 
-# Empty defaults make section-specific code explicit and keep inactive
-# sections from triggering network calls.
-health_steps = pd.DataFrame()
-recovery = pd.DataFrame()
-sleep = pd.DataFrame()
-body = pd.DataFrame()
-nutrition = pd.DataFrame()
-endurance = pd.DataFrame()
-performance_history = pd.DataFrame()
-goal_progress = pd.DataFrame()
-body_calc = pd.DataFrame()
-
-if selected_section == "Overview & Goals":
-    health_steps = safe_frame(
-        "Google Health steps",
-        lambda: load_google_health_steps(days=90),
-        source_status,
-    )
-    sleep = safe_frame(
-        "Google Health sleep",
-        lambda: load_google_health_sleep(days=90),
-        source_status,
-    )
-    body = safe_frame(
-        "Google Health body composition",
-        lambda: load_google_health_body(days=90),
-        source_status,
-    )
-    nutrition = safe_frame(
-        "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
-        source_status,
-    )
-    # Endurance history is intentionally deferred to Recovery & Data Quality.
-    goal_progress = build_goal_progress(
-        goals,
-        body,
-        df,
-        endurance,
-        alias_rules,
-        proxy_config=body_proxy,
-    )
-    body_calc = prepare_body_calculations(body, body_proxy)
-
-elif selected_section == "Workout Review":
-    health_steps = safe_frame(
-        "Google Health steps",
-        lambda: load_google_health_steps(days=90),
-        source_status,
-    )
-    recovery = safe_frame(
-        "Google Health recovery",
-        lambda: load_google_health_recovery(days=90),
-        source_status,
-    )
-    sleep = safe_frame(
-        "Google Health sleep",
-        lambda: load_google_health_sleep(days=90),
-        source_status,
-    )
-    nutrition = safe_frame(
-        "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
-        source_status,
-    )
-    # Workout HR is loaded later only for the selected workout.
-
-elif selected_section == "Strength Progress":
-    performance_history = build_exercise_performance_history(df)
-    goal_progress = build_goal_progress(
-        goals,
-        body,
-        df,
-        endurance,
-        alias_rules,
-        proxy_config=body_proxy,
-    )
-
-elif selected_section == "Body Composition & Nutrition":
-    body = safe_frame(
-        "Google Health body composition",
-        lambda: load_google_health_body(days=365),
-        source_status,
-    )
-    nutrition = safe_frame(
-        "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
-        source_status,
-    )
-    goal_progress = build_goal_progress(
-        goals,
-        body,
-        df,
-        endurance,
-        alias_rules,
-        proxy_config=body_proxy,
-    )
-    body_calc = prepare_body_calculations(body, body_proxy)
-
-elif selected_section == "Recovery & Data Quality":
-    health_steps = safe_frame(
-        "Google Health steps",
-        lambda: load_google_health_steps(days=90),
-        source_status,
-    )
-    recovery = safe_frame(
-        "Google Health recovery",
-        lambda: load_google_health_recovery(days=90),
-        source_status,
-    )
-    sleep = safe_frame(
-        "Google Health sleep",
-        lambda: load_google_health_sleep(days=90),
-        source_status,
-    )
-    body = safe_frame(
-        "Google Health body composition",
-        lambda: load_google_health_body(days=365),
-        source_status,
-    )
-    nutrition = safe_frame(
-        "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
-        source_status,
-    )
-    endurance = safe_frame(
-        "Google Health endurance sessions",
-        lambda: load_google_health_endurance_sessions(days=730),
-        source_status,
-    )
-    goal_progress = build_goal_progress(
-        goals,
-        body,
-        df,
-        endurance,
-        alias_rules,
-        proxy_config=body_proxy,
-    )
-
-if selected_section == "Overview & Goals":
+with overview_tab:
     st.header("Current overview")
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
     week_start = today - timedelta(days=7)
@@ -1312,15 +1206,8 @@ if selected_section == "Overview & Goals":
                         )
                     st.caption(goal["status"])
 
-    with st.expander("Body composition & strength goals", expanded=False):
-        overview_goal_progress = goal_progress[
-            goal_progress["category"].isin(["Body Composition", "Strength"])
-        ]
-        render_goal_table(overview_goal_progress)
-        st.caption(
-            "Run, swim and bike goal history loads only in Recovery & Data Quality "
-            "to keep the Overview fast."
-        )
+    with st.expander("All goals and current comparisons", expanded=False):
+        render_goal_table(goal_progress)
 
     left, right = st.columns(2)
     with left:
@@ -1357,7 +1244,7 @@ if selected_section == "Overview & Goals":
                 fig.update_layout(height=320, xaxis_tickformat="%d %b")
                 st.plotly_chart(fig, use_container_width=True)
 
-elif selected_section == "Workout Review":
+with workout_tab:
     st.header("Workout review")
     if session_summary.empty:
         st.info("No workout sessions are available.")
@@ -1511,7 +1398,7 @@ elif selected_section == "Workout Review":
                 height=520,
             )
 
-elif selected_section == "Strength Progress":
+with strength_tab:
     st.header("Strength progress")
     if performance_history.empty:
         st.info("No working-set performance history is available.")
@@ -1613,7 +1500,7 @@ elif selected_section == "Strength Progress":
             "Edit data/goal_exercise_aliases.csv when a Hevy exercise name is not mapped correctly."
         )
 
-elif selected_section == "Body Composition & Nutrition":
+with body_tab:
     st.header("Body composition and nutrition")
     body_left, nutrition_right = st.columns(2)
     with body_left:
@@ -1790,7 +1677,7 @@ elif selected_section == "Body Composition & Nutrition":
     st.subheader("Body-composition goals")
     render_goal_table(goal_progress, "Body Composition")
 
-elif selected_section == "Recovery & Data Quality":
+with recovery_tab:
     st.header("Recovery, endurance goals and data quality")
     rec_left, sleep_right = st.columns(2)
     with rec_left:
