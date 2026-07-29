@@ -52,7 +52,7 @@ def get_secret(name: str, default=None):
 
 
 @st.cache_data(ttl=14400, show_spinner=False)
-def fetch_hevy_workouts(api_key: str, page_size: int = 50, max_pages: int = 10):
+def fetch_hevy_workouts(api_key: str, page_size: int = 10, max_pages: int = 10):
     headers = {
         "accept": "application/json",
         "api-key": api_key
@@ -956,10 +956,10 @@ with st.sidebar:
     page_size = st.number_input(
         "API page size",
         min_value=1,
-        max_value=50,
-        value=50,
+        max_value=10,
+        value=10,
         step=1,
-        help="50 reduces Hevy API round-trips while returning the same workout history.",
+        help="Hevy's workouts endpoint is used in pages of up to 10 workouts.",
     )
     max_pages = st.number_input(
         "Max Hevy API pages",
