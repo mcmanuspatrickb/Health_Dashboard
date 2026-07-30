@@ -43,6 +43,8 @@ DEFAULT_CSV = BASE_DIR / "data" / "workouts.csv"
 GOALS_PATH = BASE_DIR / "data" / "fitness_goals.json"
 GOAL_ALIASES_PATH = BASE_DIR / "data" / "goal_exercise_aliases.csv"
 HEVY_BASE_URL = "https://api.hevyapp.com/v1/workouts"
+HEVY_BODY_MEASUREMENTS_URL = "https://api.hevyapp.com/v1/body_measurements"
+USER_HEIGHT_CM = 186.0
 
 
 def get_secret(name: str, default=None):
@@ -96,6 +98,266 @@ def fetch_hevy_workouts(api_key: str, page_size: int = 10, max_pages: int = 10):
             break
 
     return all_workouts
+
+
+
+@st.cache_data(ttl=14400, show_spinner=False)
+def fetch_hevy_body_measurements(
+    api_key: str,
+    page_size: int = 10,
+    max_pages: int = 30,
+):
+    """Fetch Hevy body measurements without modifying the Hevy account."""
+    headers = {
+        "accept": "application/json",
+        "api-key": api_key,
+    }
+
+    all_measurements = []
+
+    for page in range(1, max_pages + 1):
+        response = requests.get(
+            HEVY_BODY_MEASUREMENTS_URL,
+            headers=headers,
+            params={"page": page, "pageSize": page_size},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        measurements = (
+            data.get("body_measurements")
+            or data.get("bodyMeasurements")
+            or data.get("measurements")
+            or data.get("data")
+            or data.get("items")
+            or []
+        )
+
+        if not measurements:
+            break
+
+        all_measurements.extend(measurements)
+
+        page_count = (
+            data.get("page_count")
+            or data.get("pageCount")
+            or data.get("total_pages")
+            or data.get("totalPages")
+        )
+        if page_count is not None:
+            try:
+                if page >= int(page_count):
+                    break
+            except (TypeError, ValueError):
+                pass
+
+        if len(measurements) < page_size:
+            break
+
+    return all_measurements
+
+
+def normalize_hevy_body_measurements(
+    measurements: list,
+) -> pd.DataFrame:
+    """Normalize the body-measurement fields observed in the Hevy API."""
+    if not measurements:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(measurements).copy()
+
+    expected_columns = [
+        "id",
+        "date",
+        "weight_kg",
+        "fat_percent",
+        "created_at",
+        "neck_cm",
+        "shoulder_cm",
+        "chest_cm",
+        "left_bicep_cm",
+        "right_bicep_cm",
+        "left_forearm_cm",
+        "right_forearm_cm",
+        "abdomen",
+        "waist",
+        "hips",
+        "left_thigh",
+        "right_thigh",
+        "left_calf",
+        "right_calf",
+    ]
+
+    for column in expected_columns:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+    frame["date"] = pd.to_datetime(
+        frame["date"],
+        errors="coerce",
+    )
+
+    numeric_columns = [
+        column
+        for column in expected_columns
+        if column not in {"id", "date", "created_at"}
+    ]
+    for column in numeric_columns:
+        frame[column] = pd.to_numeric(
+            frame[column],
+            errors="coerce",
+        )
+
+    if "id" in frame.columns:
+        frame = frame.drop_duplicates(
+            subset=["id"],
+            keep="last",
+        )
+    else:
+        frame = frame.drop_duplicates()
+
+    return (
+        frame.dropna(subset=["date"])
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+
+def load_hevy_body_measurements() -> pd.DataFrame:
+    api_key = get_secret("HEVY_API_KEY")
+    if not api_key:
+        raise RuntimeError("HEVY_API_KEY is missing.")
+
+    raw = fetch_hevy_body_measurements(
+        api_key,
+        page_size=10,
+        max_pages=30,
+    )
+    return normalize_hevy_body_measurements(raw)
+
+
+HEVY_MEASUREMENT_GROUPS = {
+    "Waist": [("Waist", "waist")],
+    "Abdomen": [("Abdomen", "abdomen")],
+    "Chest": [("Chest", "chest_cm")],
+    "Shoulders": [("Shoulders", "shoulder_cm")],
+    "Neck": [("Neck", "neck_cm")],
+    "Biceps": [
+        ("Left bicep", "left_bicep_cm"),
+        ("Right bicep", "right_bicep_cm"),
+    ],
+    "Forearms": [
+        ("Left forearm", "left_forearm_cm"),
+        ("Right forearm", "right_forearm_cm"),
+    ],
+    "Hips": [("Hips", "hips")],
+    "Thighs": [
+        ("Left thigh", "left_thigh"),
+        ("Right thigh", "right_thigh"),
+    ],
+    "Calves": [
+        ("Left calf", "left_calf"),
+        ("Right calf", "right_calf"),
+    ],
+}
+
+
+def latest_measurement_value(
+    frame: pd.DataFrame,
+    column: str,
+):
+    if frame.empty or column not in frame.columns:
+        return None, None
+
+    local = frame[["date", column]].dropna(
+        subset=[column]
+    ).sort_values("date")
+    if local.empty:
+        return None, None
+
+    row = local.iloc[-1]
+    return float(row[column]), pd.Timestamp(row["date"])
+
+
+def first_measurement_value(
+    frame: pd.DataFrame,
+    column: str,
+):
+    if frame.empty or column not in frame.columns:
+        return None, None
+
+    local = frame[["date", column]].dropna(
+        subset=[column]
+    ).sort_values("date")
+    if local.empty:
+        return None, None
+
+    row = local.iloc[0]
+    return float(row[column]), pd.Timestamp(row["date"])
+
+
+def build_measurement_long_frame(
+    frame: pd.DataFrame,
+    group_name: str,
+) -> pd.DataFrame:
+    rows = []
+
+    for series_name, column in HEVY_MEASUREMENT_GROUPS[group_name]:
+        if column not in frame.columns:
+            continue
+
+        local = frame[["date", column]].dropna(
+            subset=[column]
+        ).copy()
+        for _, row in local.iterrows():
+            rows.append(
+                {
+                    "date": row["date"],
+                    "series": series_name,
+                    "cm": float(row[column]),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=["date", "series", "cm"]
+        )
+
+    return pd.DataFrame(rows).sort_values(
+        ["date", "series"]
+    )
+
+
+def latest_measurement_table(
+    frame: pd.DataFrame,
+) -> pd.DataFrame:
+    rows = []
+
+    for group_name, series_defs in HEVY_MEASUREMENT_GROUPS.items():
+        for series_name, column in series_defs:
+            value, measured_at = latest_measurement_value(
+                frame,
+                column,
+            )
+            if value is None:
+                continue
+
+            rows.append(
+                {
+                    "Measurement": series_name,
+                    "Latest (cm)": round(value, 1),
+                    "Last measured": measured_at.strftime(
+                        "%d %b %Y"
+                    ),
+                    "Group": group_name,
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows)
 
 
 def first_existing(obj: dict, keys: list, default=None):
@@ -985,7 +1247,7 @@ with st.sidebar:
         "are stored in data/goal_exercise_aliases.csv."
     )
     st.caption(
-        "V11.1: Overall Trends shows only weight, body fat %, and estimated muscle mass %."
+        "V12: Hevy circumference measurements are integrated into Body Composition & Nutrition."
     )
 
 source_status = []
@@ -1040,6 +1302,7 @@ sleep = pd.DataFrame()
 body = pd.DataFrame()
 nutrition = pd.DataFrame()
 endurance = pd.DataFrame()
+hevy_measurements = pd.DataFrame()
 performance_history = pd.DataFrame()
 goal_progress = pd.DataFrame()
 body_calc = pd.DataFrame()
@@ -1139,6 +1402,11 @@ elif selected_section == "Body Composition & Nutrition":
     endurance = safe_frame(
         "Google Health endurance sessions",
         lambda: load_google_health_endurance_sessions(days=90),
+        source_status,
+    )
+    hevy_measurements = safe_frame(
+        "Hevy body measurements",
+        load_hevy_body_measurements,
         source_status,
     )
     goal_progress = build_goal_progress(
@@ -2204,6 +2472,196 @@ elif selected_section == "Body Composition & Nutrition":
             "Trends use a 7-day rolling median. "
             "This is a Withings-compatible proxy, not a direct skeletal-muscle measurement."
         )
+
+    st.subheader("Body measurements")
+    st.caption(
+        "Circumference measurements come from Hevy. "
+        "Google Health remains the dashboard source for weight and body-fat percentage."
+    )
+
+    if hevy_measurements.empty:
+        st.info(
+            "No Hevy circumference measurements are available."
+        )
+    else:
+        waist_now, waist_date = latest_measurement_value(
+            hevy_measurements,
+            "waist",
+        )
+        waist_first, waist_first_date = first_measurement_value(
+            hevy_measurements,
+            "waist",
+        )
+
+        waist_change = (
+            waist_now - waist_first
+            if waist_now is not None
+            and waist_first is not None
+            else None
+        )
+        waist_height_ratio = (
+            waist_now / USER_HEIGHT_CM
+            if waist_now is not None
+            else None
+        )
+
+        circumference_columns = [
+            column
+            for series_defs in HEVY_MEASUREMENT_GROUPS.values()
+            for _, column in series_defs
+            if column in hevy_measurements.columns
+        ]
+        any_measurement_mask = (
+            hevy_measurements[circumference_columns]
+            .notna()
+            .any(axis=1)
+            if circumference_columns
+            else pd.Series(
+                False,
+                index=hevy_measurements.index,
+            )
+        )
+        tape_rows = hevy_measurements.loc[
+            any_measurement_mask
+        ].copy()
+        latest_tape_date = (
+            pd.Timestamp(tape_rows["date"].max())
+            if not tape_rows.empty
+            else None
+        )
+
+        m = st.columns(4)
+        m[0].metric(
+            "Current waist",
+            f"{waist_now:.1f} cm"
+            if waist_now is not None
+            else "—",
+        )
+        m[1].metric(
+            "Waist change",
+            f"{waist_change:+.1f} cm"
+            if waist_change is not None
+            else "—",
+            delta_color="inverse",
+        )
+        m[2].metric(
+            "Waist / height",
+            f"{waist_height_ratio:.3f}"
+            if waist_height_ratio is not None
+            else "—",
+        )
+        m[3].metric(
+            "Last tape measurement",
+            latest_tape_date.strftime("%d %b %Y")
+            if latest_tape_date is not None
+            else "—",
+        )
+
+        selected_measurement = st.selectbox(
+            "Measurement trend",
+            options=list(HEVY_MEASUREMENT_GROUPS.keys()),
+            index=0,
+            key="hevy_measurement_trend",
+        )
+
+        measurement_long = build_measurement_long_frame(
+            hevy_measurements,
+            selected_measurement,
+        )
+
+        if measurement_long.empty:
+            st.info(
+                f"No {selected_measurement.lower()} measurements "
+                "are available."
+            )
+        else:
+            fig = px.line(
+                measurement_long,
+                x="date",
+                y="cm",
+                color="series",
+                markers=True,
+                labels={
+                    "date": "Date",
+                    "cm": "Circumference (cm)",
+                    "series": "Measurement",
+                },
+            )
+            fig.update_layout(
+                height=420,
+                xaxis_tickformat="%d %b %Y",
+                legend_title_text="",
+                hovermode="x unified",
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+            )
+
+            group_start = (
+                measurement_long.sort_values("date")
+                .groupby("series", as_index=False)
+                .first()
+            )
+            group_end = (
+                measurement_long.sort_values("date")
+                .groupby("series", as_index=False)
+                .last()
+            )
+            changes = group_start[
+                ["series", "cm"]
+            ].rename(
+                columns={"cm": "start_cm"}
+            ).merge(
+                group_end[
+                    ["series", "cm"]
+                ].rename(
+                    columns={"cm": "latest_cm"}
+                ),
+                on="series",
+                how="outer",
+            )
+            changes["change_cm"] = (
+                changes["latest_cm"]
+                - changes["start_cm"]
+            )
+
+            change_text = "; ".join(
+                f"{row['series']}: "
+                f"{row['start_cm']:.1f} → "
+                f"{row['latest_cm']:.1f} cm "
+                f"({row['change_cm']:+.1f} cm)"
+                for _, row in changes.iterrows()
+            )
+            if change_text:
+                st.caption(
+                    "Available-history change — "
+                    + change_text
+                    + "."
+                )
+
+        st.caption(
+            "Measurement charts use all available Hevy tape-measure history "
+            "because circumference entries are less frequent than weight measurements."
+        )
+
+        with st.expander(
+            "Latest Hevy circumference measurements",
+            expanded=False,
+        ):
+            latest_table = latest_measurement_table(
+                hevy_measurements
+            )
+            if latest_table.empty:
+                st.info(
+                    "No circumference measurements are available."
+                )
+            else:
+                st.dataframe(
+                    latest_table,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     st.subheader("Nutrition adherence")
     logged = (
