@@ -1,0 +1,38 @@
+name: Withings Sync
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: withings-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      WITHINGS_DATABASE_URL: ${{ secrets.WITHINGS_DATABASE_URL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: withings_sync_service_requirements.txt
+
+      - name: Install sync dependencies
+        run: python -m pip install -r withings_sync_service_requirements.txt
+
+      - name: Sync Withings measurements
+        run: python withings_sync_service.py sync

@@ -934,7 +934,7 @@ def load_google_health_endurance_sessions(days: int = 730) -> pd.DataFrame:
     return frame
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_withings_metrics(days: int = 730):
     return load_withings_dashboard_measurements(days=days)
 
