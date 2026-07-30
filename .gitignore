@@ -1,0 +1,7 @@
+
+# Private credentials and local data
+.streamlit/
+private/
+client_secret.json
+streamlit_cloud_secrets.toml
+__pycache__/

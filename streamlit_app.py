@@ -17,6 +17,13 @@ from google_health_data import (
     load_sleep,
     load_steps,
 )
+from withings_bridge import (
+    build_withings_bp_sessions,
+    build_withings_scale_sessions,
+    latest_non_null as latest_withings_value,
+    load_withings_dashboard_measurements,
+)
+
 from google_health_training import analyze_workout_heart_rate
 from hevy_training_load import (
     build_exercise_summary,
@@ -927,6 +934,11 @@ def load_google_health_endurance_sessions(days: int = 730) -> pd.DataFrame:
     return frame
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def load_withings_metrics(days: int = 730):
+    return load_withings_dashboard_measurements(days=days)
+
+
 def safe_frame(label: str, loader, errors: list[dict]) -> pd.DataFrame:
     try:
         frame = loader()
@@ -1247,7 +1259,7 @@ with st.sidebar:
         "are stored in data/goal_exercise_aliases.csv."
     )
     st.caption(
-        "V12: Hevy circumference measurements are integrated into Body Composition & Nutrition."
+        "V13: Withings advanced metrics and blood pressure are integrated; persistent sync mode is supported."
     )
 
 source_status = []
@@ -1303,6 +1315,9 @@ body = pd.DataFrame()
 nutrition = pd.DataFrame()
 endurance = pd.DataFrame()
 hevy_measurements = pd.DataFrame()
+withings_measurements = pd.DataFrame()
+withings_scale = pd.DataFrame()
+withings_bp = pd.DataFrame()
 performance_history = pd.DataFrame()
 goal_progress = pd.DataFrame()
 body_calc = pd.DataFrame()
@@ -1409,6 +1424,14 @@ elif selected_section == "Body Composition & Nutrition":
         load_hevy_body_measurements,
         source_status,
     )
+    withings_measurements = safe_frame(
+        "Withings health metrics",
+        lambda: load_withings_metrics(days=730),
+        source_status,
+    )
+    withings_scale = build_withings_scale_sessions(
+        withings_measurements
+    )
     goal_progress = build_goal_progress(
         goals,
         body,
@@ -1434,6 +1457,14 @@ elif selected_section == "Recovery & Data Quality":
         "Google Health sleep",
         lambda: load_google_health_sleep(days=90),
         source_status,
+    )
+    withings_measurements = safe_frame(
+        "Withings health metrics",
+        lambda: load_withings_metrics(days=730),
+        source_status,
+    )
+    withings_bp = build_withings_bp_sessions(
+        withings_measurements
     )
 
 
@@ -2473,6 +2504,173 @@ elif selected_section == "Body Composition & Nutrition":
             "This is a Withings-compatible proxy, not a direct skeletal-muscle measurement."
         )
 
+    st.subheader("Withings advanced body composition")
+    st.caption(
+        "Direct Withings scale metrics. These complement Google Health "
+        "weight/body-fat trends and Hevy tape measurements."
+    )
+
+    if withings_scale.empty:
+        st.info(
+            "No Withings advanced body-composition data is available. "
+            "Local mode uses private/withings_token.json; cloud mode uses "
+            "WITHINGS_DATABASE_URL."
+        )
+    else:
+        direct_muscle = latest_withings_value(
+            withings_scale, "muscle_mass_kg"
+        )
+        direct_muscle_pct = latest_withings_value(
+            withings_scale, "muscle_mass_pct"
+        )
+        visceral = latest_withings_value(
+            withings_scale, "visceral_fat_index"
+        )
+        water_pct = latest_withings_value(
+            withings_scale, "water_pct"
+        )
+        bmr = latest_withings_value(
+            withings_scale, "bmr_kcal_day"
+        )
+
+        w = st.columns(5)
+        w[0].metric(
+            "Direct muscle mass",
+            f"{direct_muscle:.2f} kg"
+            if direct_muscle is not None else "—",
+        )
+        w[1].metric(
+            "Direct muscle mass %",
+            f"{direct_muscle_pct:.2f}%"
+            if direct_muscle_pct is not None else "—",
+            f"{direct_muscle_pct - 80:+.1f} pp vs >80%"
+            if direct_muscle_pct is not None else None,
+        )
+        w[2].metric(
+            "Visceral fat index",
+            f"{visceral:.1f}" if visceral is not None else "—",
+        )
+        w[3].metric(
+            "Water %",
+            f"{water_pct:.1f}%"
+            if water_pct is not None else "—",
+        )
+        w[4].metric(
+            "BMR",
+            f"{bmr:,.0f} kcal/day"
+            if bmr is not None else "—",
+        )
+
+        trend_defs = {
+            "Muscle mass %": ("muscle_mass_pct", "%"),
+            "Muscle mass": ("muscle_mass_kg", "kg"),
+            "Visceral fat": ("visceral_fat_index", "index"),
+            "Water %": ("water_pct", "%"),
+            "BMR": ("bmr_kcal_day", "kcal/day"),
+            "Vascular age": ("vascular_age_years", "years"),
+            "Pulse wave velocity": ("pwv_m_s", "m/s"),
+            "Nerve Health Score": ("nerve_health_score", "score"),
+            "Metabolic age": ("metabolic_age_years", "years"),
+        }
+
+        selected_withings_metric = st.selectbox(
+            "Withings metric trend",
+            list(trend_defs.keys()),
+            index=0,
+            key="withings_metric_trend",
+        )
+        metric_column, metric_unit = trend_defs[
+            selected_withings_metric
+        ]
+
+        if metric_column not in withings_scale.columns:
+            st.info(
+                f"No {selected_withings_metric.lower()} data is available."
+            )
+        else:
+            metric_trend = withings_scale[
+                ["date", metric_column]
+            ].dropna(subset=[metric_column]).copy()
+
+            if metric_trend.empty:
+                st.info(
+                    f"No {selected_withings_metric.lower()} data is available."
+                )
+            else:
+                fig = px.line(
+                    metric_trend,
+                    x="date",
+                    y=metric_column,
+                    markers=True,
+                    labels={
+                        "date": "Date",
+                        metric_column: (
+                            f"{selected_withings_metric} ({metric_unit})"
+                        ),
+                    },
+                )
+                if selected_withings_metric == "Muscle mass %":
+                    fig.add_hline(
+                        y=80,
+                        line_dash="dash",
+                        annotation_text="MM >80% goal",
+                    )
+                fig.update_layout(
+                    height=390,
+                    xaxis_tickformat="%d %b %Y",
+                )
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                )
+
+        with st.expander(
+            "Additional Withings metrics",
+            expanded=False,
+        ):
+            latest_row = (
+                withings_scale.sort_values("date").iloc[-1]
+            )
+            extras = []
+            for label, column, unit in [
+                ("Fat-free mass", "fat_free_mass_kg", "kg"),
+                ("Fat mass", "fat_mass_kg", "kg"),
+                ("Bone mass", "bone_mass_kg", "kg"),
+                ("Vascular age", "vascular_age_years", "years"),
+                ("Pulse wave velocity", "pwv_m_s", "m/s"),
+                ("Nerve Health Score", "nerve_health_score", ""),
+                ("Metabolic age", "metabolic_age_years", "years"),
+                ("Extracellular water", "extracellular_water_kg", "kg"),
+                ("Intracellular water", "intracellular_water_kg", "kg"),
+            ]:
+                value = latest_withings_value(
+                    withings_scale, column
+                )
+                if value is not None:
+                    extras.append(
+                        {
+                            "Metric": label,
+                            "Latest": round(value, 3),
+                            "Unit": unit,
+                        }
+                    )
+            if extras:
+                st.dataframe(
+                    pd.DataFrame(extras),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No additional Withings metrics are available.")
+
+        source_mode = withings_measurements.attrs.get(
+            "source_mode", "unknown"
+        )
+        st.caption(
+            f"Withings source mode: {source_mode}. "
+            "Persistent-database mode is the intended Streamlit Cloud setup."
+        )
+
     st.subheader("Body measurements")
     st.caption(
         "Circumference measurements come from Hevy. "
@@ -2946,6 +3144,74 @@ elif selected_section == "Recovery & Data Quality":
             )
             st.plotly_chart(fig, use_container_width=True)
 
+    st.subheader("Blood pressure")
+    st.caption(
+        "Withings BPM measurements. The dashboard shows the recorded values "
+        "without assigning a diagnosis or treatment category."
+    )
+
+    if withings_bp.empty:
+        st.info("No paired Withings blood-pressure measurements are available.")
+    else:
+        bp_latest = withings_bp.sort_values("date").iloc[-1]
+        bp_cards = st.columns(4)
+        bp_cards[0].metric(
+            "Systolic",
+            f"{bp_latest['systolic_mm_hg']:.0f} mmHg",
+        )
+        bp_cards[1].metric(
+            "Diastolic",
+            f"{bp_latest['diastolic_mm_hg']:.0f} mmHg",
+        )
+        pulse_value = bp_latest.get("pulse_bpm")
+        bp_cards[2].metric(
+            "Pulse",
+            f"{pulse_value:.0f} bpm"
+            if pd.notna(pulse_value) else "—",
+        )
+        bp_cards[3].metric(
+            "Last BP",
+            pd.Timestamp(bp_latest["date"]).strftime(
+                "%d %b %Y"
+            ),
+        )
+
+        bp_recent = withings_bp.sort_values("date").tail(60).copy()
+        bp_long = bp_recent[
+            ["date", "systolic_mm_hg", "diastolic_mm_hg"]
+        ].melt(
+            id_vars="date",
+            var_name="series",
+            value_name="mmHg",
+        )
+        bp_long["series"] = bp_long["series"].map(
+            {
+                "systolic_mm_hg": "Systolic",
+                "diastolic_mm_hg": "Diastolic",
+            }
+        )
+        bp_fig = px.line(
+            bp_long,
+            x="date",
+            y="mmHg",
+            color="series",
+            markers=True,
+            labels={
+                "date": "Date",
+                "mmHg": "Blood pressure (mmHg)",
+                "series": "",
+            },
+        )
+        bp_fig.update_layout(
+            height=360,
+            xaxis_tickformat="%d %b %Y",
+            legend_title_text="",
+        )
+        st.plotly_chart(
+            bp_fig,
+            use_container_width=True,
+        )
+
     st.subheader("Data quality")
     quality_rows = [
         source_quality_row(
@@ -2967,6 +3233,11 @@ elif selected_section == "Recovery & Data Quality":
             "Hevy sessions",
             session_summary,
             date_column="start_time",
+        ),
+        source_quality_row(
+            "Withings blood pressure",
+            withings_bp,
+            date_column="date",
         ),
     ]
     st.dataframe(
