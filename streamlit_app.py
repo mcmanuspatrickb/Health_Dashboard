@@ -1265,7 +1265,7 @@ with st.sidebar:
         "are stored in data/goal_exercise_aliases.csv."
     )
     st.caption(
-        "V14.2: Renpho adds safe record management and confirmed deletion."
+        "V14.3: Renpho record management is shown prominently near the top of the Renpho tab."
     )
 
 source_status = []
@@ -3398,6 +3398,146 @@ elif selected_section == "Renpho":
             ).strftime("%d %b %Y"),
         )
 
+        with st.expander(
+            "🗑️ Manage / delete Renpho records",
+            expanded=True,
+        ):
+            st.caption(
+                "This section modifies only the dedicated Renpho table. "
+                "It does not touch Google Health, Withings, Hevy, goals, "
+                "recovery, nutrition, or any other dashboard source."
+            )
+
+            manage_frame = renpho_measurements.sort_values(
+                "measured_at",
+                ascending=False,
+            ).copy()
+
+            def _renpho_record_label(row):
+                measured = pd.Timestamp(row["measured_at"])
+                try:
+                    measured = measured.tz_convert(
+                        "Europe/Berlin"
+                    )
+                except Exception:
+                    pass
+
+                parts = [
+                    measured.strftime("%d %b %Y %H:%M"),
+                ]
+                if pd.notna(row.get("weight_kg")):
+                    parts.append(
+                        f"{float(row['weight_kg']):.2f} kg"
+                    )
+                if pd.notna(row.get("body_fat_pct")):
+                    parts.append(
+                        f"{float(row['body_fat_pct']):.1f}% BF"
+                    )
+                return " · ".join(parts)
+
+            record_labels = {
+                int(row["measurement_id"]): (
+                    _renpho_record_label(row)
+                )
+                for _, row in manage_frame.iterrows()
+            }
+
+            selected_measurement_id = st.selectbox(
+                "Select saved Renpho test",
+                options=list(record_labels.keys()),
+                format_func=lambda measurement_id: (
+                    record_labels[measurement_id]
+                ),
+                key="renpho_record_to_manage",
+            )
+
+            selected_record = manage_frame[
+                manage_frame["measurement_id"]
+                .astype(int)
+                .eq(int(selected_measurement_id))
+            ].iloc[0]
+
+            preview_columns = [
+                ("Test date", "measured_at"),
+                ("Body score", "body_score"),
+                ("Weight (kg)", "weight_kg"),
+                ("Body fat (%)", "body_fat_pct"),
+                (
+                    "Skeletal muscle (kg)",
+                    "skeletal_muscle_mass_kg",
+                ),
+                ("Visceral fat", "visceral_fat_index"),
+            ]
+
+            preview_rows = []
+            for label, column in preview_columns:
+                value = selected_record.get(column)
+                if pd.isna(value):
+                    continue
+
+                if column == "measured_at":
+                    timestamp = pd.Timestamp(value)
+                    try:
+                        timestamp = timestamp.tz_convert(
+                            "Europe/Berlin"
+                        )
+                    except Exception:
+                        pass
+                    display_value = timestamp.strftime(
+                        "%d %b %Y %H:%M"
+                    )
+                elif column == "body_score":
+                    display_value = f"{float(value):.0f}"
+                elif column in {
+                    "weight_kg",
+                    "skeletal_muscle_mass_kg",
+                }:
+                    display_value = f"{float(value):.2f}"
+                else:
+                    display_value = f"{float(value):.1f}"
+
+                preview_rows.append(
+                    {
+                        "Field": label,
+                        "Selected record": display_value,
+                    }
+                )
+
+            st.dataframe(
+                pd.DataFrame(preview_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            confirm_delete = st.checkbox(
+                "I confirm I want to permanently delete "
+                "this Renpho test",
+                key="confirm_renpho_delete",
+            )
+
+            delete_clicked = st.button(
+                "Delete selected Renpho measurement",
+                type="primary",
+                disabled=not confirm_delete,
+                key="delete_renpho_record",
+            )
+
+            if delete_clicked:
+                try:
+                    delete_renpho_measurement(
+                        int(selected_measurement_id)
+                    )
+                    st.cache_data.clear()
+                    st.success(
+                        "Selected Renpho measurement deleted."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(
+                        f"Could not delete Renpho measurement: "
+                        f"{exc}"
+                    )
+
         st.subheader("Monthly body-composition trends")
 
         trend_left, trend_right = st.columns(2)
@@ -3863,145 +4003,6 @@ elif selected_section == "Renpho":
                 use_container_width=True,
                 hide_index=True,
             )
-
-    st.subheader("Manage Renpho records")
-    st.caption(
-        "Delete only Renpho records from the dedicated Renpho table. "
-        "This does not modify Google Health, Withings, Hevy, goals, "
-        "recovery, nutrition, or any other dashboard source."
-    )
-
-    if renpho_measurements.empty:
-        st.info("There are no Renpho records to manage.")
-    else:
-        manage_frame = renpho_measurements.sort_values(
-            "measured_at",
-            ascending=False,
-        ).copy()
-
-        def _renpho_record_label(row):
-            measured = pd.Timestamp(row["measured_at"])
-            try:
-                measured = measured.tz_convert(
-                    "Europe/Berlin"
-                )
-            except Exception:
-                pass
-
-            parts = [
-                measured.strftime("%d %b %Y %H:%M"),
-            ]
-            if pd.notna(row.get("weight_kg")):
-                parts.append(
-                    f"{float(row['weight_kg']):.2f} kg"
-                )
-            if pd.notna(row.get("body_fat_pct")):
-                parts.append(
-                    f"{float(row['body_fat_pct']):.1f}% BF"
-                )
-            return " · ".join(parts)
-
-        record_labels = {
-            int(row["measurement_id"]): _renpho_record_label(
-                row
-            )
-            for _, row in manage_frame.iterrows()
-        }
-
-        selected_measurement_id = st.selectbox(
-            "Select Renpho record",
-            options=list(record_labels.keys()),
-            format_func=lambda measurement_id: (
-                record_labels[measurement_id]
-            ),
-            key="renpho_record_to_manage",
-        )
-
-        selected_record = manage_frame[
-            manage_frame["measurement_id"].astype(int).eq(
-                int(selected_measurement_id)
-            )
-        ].iloc[0]
-
-        preview_columns = [
-            ("Test date", "measured_at"),
-            ("Body score", "body_score"),
-            ("Weight (kg)", "weight_kg"),
-            ("Body fat (%)", "body_fat_pct"),
-            (
-                "Skeletal muscle (kg)",
-                "skeletal_muscle_mass_kg",
-            ),
-            ("Visceral fat", "visceral_fat_index"),
-        ]
-
-        preview_rows = []
-        for label, column in preview_columns:
-            value = selected_record.get(column)
-            if pd.isna(value):
-                continue
-
-            if column == "measured_at":
-                timestamp = pd.Timestamp(value)
-                try:
-                    timestamp = timestamp.tz_convert(
-                        "Europe/Berlin"
-                    )
-                except Exception:
-                    pass
-                display_value = timestamp.strftime(
-                    "%d %b %Y %H:%M"
-                )
-            elif column == "body_score":
-                display_value = f"{float(value):.0f}"
-            elif column in {
-                "weight_kg",
-                "skeletal_muscle_mass_kg",
-            }:
-                display_value = f"{float(value):.2f}"
-            else:
-                display_value = f"{float(value):.1f}"
-
-            preview_rows.append(
-                {
-                    "Field": label,
-                    "Selected record": display_value,
-                }
-            )
-
-        st.dataframe(
-            pd.DataFrame(preview_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        confirm_delete = st.checkbox(
-            "Confirm deletion of this Renpho record",
-            key="confirm_renpho_delete",
-        )
-
-        delete_clicked = st.button(
-            "Delete selected Renpho measurement",
-            type="primary",
-            disabled=not confirm_delete,
-            key="delete_renpho_record",
-        )
-
-        if delete_clicked:
-            try:
-                delete_renpho_measurement(
-                    int(selected_measurement_id)
-                )
-                st.cache_data.clear()
-                st.success(
-                    "Selected Renpho measurement deleted."
-                )
-                st.rerun()
-            except Exception as exc:
-                st.error(
-                    f"Could not delete Renpho measurement: "
-                    f"{exc}"
-                )
 
     st.subheader("Add monthly Renpho measurement")
     st.caption(
