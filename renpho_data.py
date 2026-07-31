@@ -136,3 +136,19 @@ def insert_renpho_measurement(measured_at: datetime, values: dict[str, Any]) -> 
             params,
         )
         conn.commit()
+
+def delete_renpho_measurement(measurement_id: int) -> None:
+    """Delete exactly one Renpho measurement by its primary key."""
+    ensure_schema()
+    with _connect() as conn:
+        result = conn.execute(
+            f"DELETE FROM {TABLE_NAME} WHERE measurement_id = %s",
+            (int(measurement_id),),
+        )
+        conn.commit()
+
+        if result.rowcount == 0:
+            raise RuntimeError(
+                f"Renpho measurement_id {measurement_id} was not found."
+            )
+
