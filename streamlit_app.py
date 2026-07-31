@@ -17,6 +17,11 @@ from google_health_data import (
     load_sleep,
     load_steps,
 )
+from renpho_data import (
+    insert_renpho_measurement,
+    load_renpho_measurements,
+)
+
 from withings_bridge import (
     build_withings_bp_sessions,
     build_withings_scale_sessions,
@@ -1259,7 +1264,7 @@ with st.sidebar:
         "are stored in data/goal_exercise_aliases.csv."
     )
     st.caption(
-        "V13: Withings advanced metrics and blood pressure are integrated; persistent sync mode is supported."
+        "V14.1: Renpho adds monthly body-composition, segmental, and health-indicator charts."
     )
 
 source_status = []
@@ -1297,6 +1302,7 @@ SECTION_OPTIONS = [
     "Endurance",
     "Body Composition & Nutrition",
     "Recovery & Data Quality",
+    "Renpho",
 ]
 selected_section = st.radio(
     "Dashboard section",
@@ -1318,6 +1324,7 @@ hevy_measurements = pd.DataFrame()
 withings_measurements = pd.DataFrame()
 withings_scale = pd.DataFrame()
 withings_bp = pd.DataFrame()
+renpho_measurements = pd.DataFrame()
 performance_history = pd.DataFrame()
 goal_progress = pd.DataFrame()
 body_calc = pd.DataFrame()
@@ -1465,6 +1472,13 @@ elif selected_section == "Recovery & Data Quality":
     )
     withings_bp = build_withings_bp_sessions(
         withings_measurements
+    )
+
+elif selected_section == "Renpho":
+    renpho_measurements = safe_frame(
+        "Renpho monthly measurements",
+        load_renpho_measurements,
+        source_status,
     )
 
 
@@ -3303,6 +3317,643 @@ elif selected_section == "Recovery & Data Quality":
             "A missing day can reflect no measurement, an incomplete sync, "
             "or a legitimately unlogged day. Today is excluded from complete-day expectations."
         )
+
+
+elif selected_section == "Renpho":
+    st.header("Renpho")
+    st.caption(
+        "Renpho-only monthly body-composition tracking. Nothing on this page "
+        "is merged into Google Health, Withings, Hevy, goals, recovery, or "
+        "other dashboard calculations."
+    )
+
+    if renpho_measurements.empty:
+        st.info("No Renpho measurements saved yet. Use the form below.")
+    else:
+        renpho_history = renpho_measurements.sort_values(
+            "measured_at"
+        ).copy()
+        latest = renpho_history.iloc[-1]
+        previous = (
+            renpho_history.iloc[-2]
+            if len(renpho_history) >= 2
+            else None
+        )
+
+        def renpho_delta(column, suffix="", decimals=1):
+            if previous is None:
+                return None
+            current_value = latest.get(column)
+            previous_value = previous.get(column)
+            if pd.isna(current_value) or pd.isna(previous_value):
+                return None
+            change = float(current_value) - float(previous_value)
+            return f"{change:+.{decimals}f}{suffix} vs prior test"
+
+        st.subheader("Latest Renpho assessment")
+        k = st.columns(6)
+        k[0].metric(
+            "Body score",
+            f"{latest['body_score']:.0f}/100"
+            if pd.notna(latest["body_score"])
+            else "—",
+            renpho_delta("body_score", " pts", 0),
+        )
+        k[1].metric(
+            "Weight",
+            f"{latest['weight_kg']:.2f} kg"
+            if pd.notna(latest["weight_kg"])
+            else "—",
+            renpho_delta("weight_kg", " kg", 2),
+            delta_color="inverse",
+        )
+        k[2].metric(
+            "Body fat",
+            f"{latest['body_fat_pct']:.1f}%"
+            if pd.notna(latest["body_fat_pct"])
+            else "—",
+            renpho_delta("body_fat_pct", " pp", 1),
+            delta_color="inverse",
+        )
+        k[3].metric(
+            "Skeletal muscle",
+            f"{latest['skeletal_muscle_mass_kg']:.2f} kg"
+            if pd.notna(latest["skeletal_muscle_mass_kg"])
+            else "—",
+            renpho_delta("skeletal_muscle_mass_kg", " kg", 2),
+        )
+        k[4].metric(
+            "Visceral fat",
+            f"{latest['visceral_fat_index']:.1f}"
+            if pd.notna(latest["visceral_fat_index"])
+            else "—",
+            renpho_delta("visceral_fat_index", "", 1),
+            delta_color="inverse",
+        )
+        k[5].metric(
+            "Last Renpho",
+            pd.Timestamp(
+                latest["measured_at"]
+            ).strftime("%d %b %Y"),
+        )
+
+        st.subheader("Monthly body-composition trends")
+
+        trend_left, trend_right = st.columns(2)
+
+        with trend_left:
+            st.markdown("**Overall body composition**")
+            overall_cols = [
+                column
+                for column in [
+                    "weight_kg",
+                    "skeletal_muscle_mass_kg",
+                    "body_fat_pct",
+                ]
+                if column in renpho_history.columns
+            ]
+
+            if not overall_cols:
+                st.info("No body-composition trend data is available.")
+            else:
+                overall_fig = make_subplots(
+                    specs=[[{"secondary_y": True}]]
+                )
+
+                weight_data = renpho_history.dropna(
+                    subset=["weight_kg"]
+                )
+                if not weight_data.empty:
+                    overall_fig.add_trace(
+                        go.Scatter(
+                            x=weight_data["measured_at"],
+                            y=weight_data["weight_kg"],
+                            mode="lines+markers",
+                            name="Weight (kg)",
+                        ),
+                        secondary_y=False,
+                    )
+
+                muscle_data = renpho_history.dropna(
+                    subset=["skeletal_muscle_mass_kg"]
+                )
+                if not muscle_data.empty:
+                    overall_fig.add_trace(
+                        go.Scatter(
+                            x=muscle_data["measured_at"],
+                            y=muscle_data[
+                                "skeletal_muscle_mass_kg"
+                            ],
+                            mode="lines+markers",
+                            name="Skeletal muscle (kg)",
+                        ),
+                        secondary_y=False,
+                    )
+
+                fat_pct_data = renpho_history.dropna(
+                    subset=["body_fat_pct"]
+                )
+                if not fat_pct_data.empty:
+                    overall_fig.add_trace(
+                        go.Scatter(
+                            x=fat_pct_data["measured_at"],
+                            y=fat_pct_data["body_fat_pct"],
+                            mode="lines+markers",
+                            name="Body fat (%)",
+                        ),
+                        secondary_y=True,
+                    )
+
+                overall_fig.update_xaxes(
+                    title_text="Renpho test date",
+                    tickformat="%d %b %Y",
+                )
+                overall_fig.update_yaxes(
+                    title_text="Mass (kg)",
+                    secondary_y=False,
+                )
+                overall_fig.update_yaxes(
+                    title_text="Body fat (%)",
+                    secondary_y=True,
+                )
+                overall_fig.update_layout(
+                    height=420,
+                    hovermode="x unified",
+                    legend={
+                        "orientation": "h",
+                        "yanchor": "bottom",
+                        "y": 1.02,
+                        "xanchor": "center",
+                        "x": 0.5,
+                    },
+                )
+                st.plotly_chart(
+                    overall_fig,
+                    use_container_width=True,
+                )
+
+        with trend_right:
+            st.markdown("**Fat mass vs skeletal muscle mass**")
+            mass_columns = [
+                column
+                for column in [
+                    "body_fat_mass_kg",
+                    "skeletal_muscle_mass_kg",
+                ]
+                if column in renpho_history.columns
+            ]
+            mass_trend = renpho_history[
+                ["measured_at"] + mass_columns
+            ].copy()
+
+            if (
+                not mass_columns
+                or mass_trend[mass_columns].dropna(
+                    how="all"
+                ).empty
+            ):
+                st.info("No fat/muscle mass data is available.")
+            else:
+                mass_long = mass_trend.melt(
+                    id_vars="measured_at",
+                    value_vars=mass_columns,
+                    var_name="metric",
+                    value_name="kg",
+                ).dropna(subset=["kg"])
+                mass_long["metric"] = mass_long["metric"].map(
+                    {
+                        "body_fat_mass_kg": "Body fat mass",
+                        "skeletal_muscle_mass_kg": (
+                            "Skeletal muscle mass"
+                        ),
+                    }
+                )
+                mass_fig = px.line(
+                    mass_long,
+                    x="measured_at",
+                    y="kg",
+                    color="metric",
+                    markers=True,
+                    labels={
+                        "measured_at": "Renpho test date",
+                        "kg": "Mass (kg)",
+                        "metric": "",
+                    },
+                )
+                mass_fig.update_layout(
+                    height=420,
+                    xaxis_tickformat="%d %b %Y",
+                    legend_title_text="",
+                    hovermode="x unified",
+                )
+                st.plotly_chart(
+                    mass_fig,
+                    use_container_width=True,
+                )
+
+        if len(renpho_history) == 1:
+            st.caption(
+                "Time-series charts currently contain one Renpho test. "
+                "They will become trend charts as monthly readings are added."
+            )
+
+        st.subheader("Current segmental profile")
+        segment_left, segment_right = st.columns(2)
+
+        with segment_left:
+            st.markdown("**Muscle balance**")
+            muscle_snapshot = pd.DataFrame(
+                [
+                    {
+                        "Segment": label,
+                        "kg": latest.get(column),
+                    }
+                    for label, column in {
+                        "Left arm": "left_arm_muscle_kg",
+                        "Right arm": "right_arm_muscle_kg",
+                        "Trunk": "trunk_muscle_kg",
+                        "Left leg": "left_leg_muscle_kg",
+                        "Right leg": "right_leg_muscle_kg",
+                    }.items()
+                    if pd.notna(latest.get(column))
+                ]
+            )
+
+            if muscle_snapshot.empty:
+                st.info("No segmental muscle data is available.")
+            else:
+                muscle_fig = px.bar(
+                    muscle_snapshot,
+                    x="Segment",
+                    y="kg",
+                    text_auto=".2f",
+                    labels={
+                        "kg": "Muscle mass (kg)",
+                    },
+                )
+                muscle_fig.update_layout(
+                    height=400,
+                    showlegend=False,
+                )
+                st.plotly_chart(
+                    muscle_fig,
+                    use_container_width=True,
+                )
+
+                if {
+                    "left_arm_muscle_kg",
+                    "right_arm_muscle_kg",
+                    "left_leg_muscle_kg",
+                    "right_leg_muscle_kg",
+                }.issubset(latest.index):
+                    arm_diff = (
+                        float(latest["right_arm_muscle_kg"])
+                        - float(latest["left_arm_muscle_kg"])
+                    )
+                    leg_diff = (
+                        float(latest["right_leg_muscle_kg"])
+                        - float(latest["left_leg_muscle_kg"])
+                    )
+                    st.caption(
+                        f"Right − left difference: arms {arm_diff:+.2f} kg; "
+                        f"legs {leg_diff:+.2f} kg."
+                    )
+
+        with segment_right:
+            st.markdown("**Fat distribution**")
+            fat_snapshot = pd.DataFrame(
+                [
+                    {
+                        "Segment": label,
+                        "kg": latest.get(column),
+                    }
+                    for label, column in {
+                        "Left arm": "left_arm_fat_kg",
+                        "Right arm": "right_arm_fat_kg",
+                        "Trunk": "trunk_fat_kg",
+                        "Left leg": "left_leg_fat_kg",
+                        "Right leg": "right_leg_fat_kg",
+                    }.items()
+                    if pd.notna(latest.get(column))
+                ]
+            )
+
+            if fat_snapshot.empty:
+                st.info("No segmental fat data is available.")
+            else:
+                fat_fig = px.bar(
+                    fat_snapshot,
+                    x="Segment",
+                    y="kg",
+                    text_auto=".2f",
+                    labels={
+                        "kg": "Fat mass (kg)",
+                    },
+                )
+                fat_fig.update_layout(
+                    height=400,
+                    showlegend=False,
+                )
+                st.plotly_chart(
+                    fat_fig,
+                    use_container_width=True,
+                )
+
+        st.subheader("Segmental change over time")
+        segment_choice = st.radio(
+            "Segmental trend",
+            ["Muscle", "Fat"],
+            horizontal=True,
+            key="renpho_segmental_view",
+        )
+
+        if segment_choice == "Muscle":
+            segment_columns = {
+                "Left arm": "left_arm_muscle_kg",
+                "Right arm": "right_arm_muscle_kg",
+                "Trunk": "trunk_muscle_kg",
+                "Left leg": "left_leg_muscle_kg",
+                "Right leg": "right_leg_muscle_kg",
+            }
+        else:
+            segment_columns = {
+                "Left arm": "left_arm_fat_kg",
+                "Right arm": "right_arm_fat_kg",
+                "Trunk": "trunk_fat_kg",
+                "Left leg": "left_leg_fat_kg",
+                "Right leg": "right_leg_fat_kg",
+            }
+
+        segment_rows = []
+        for _, row in renpho_history.iterrows():
+            for segment_name, column in segment_columns.items():
+                if (
+                    column in row.index
+                    and pd.notna(row[column])
+                ):
+                    segment_rows.append(
+                        {
+                            "Date": row["measured_at"],
+                            "Segment": segment_name,
+                            "kg": float(row[column]),
+                        }
+                    )
+
+        if segment_rows:
+            segment_frame = pd.DataFrame(segment_rows)
+            segment_fig = px.line(
+                segment_frame,
+                x="Date",
+                y="kg",
+                color="Segment",
+                markers=True,
+                labels={
+                    "kg": (
+                        f"Segmental "
+                        f"{segment_choice.lower()} (kg)"
+                    )
+                },
+            )
+            segment_fig.update_layout(
+                height=420,
+                xaxis_tickformat="%d %b %Y",
+                hovermode="x unified",
+            )
+            st.plotly_chart(
+                segment_fig,
+                use_container_width=True,
+            )
+        else:
+            st.info(
+                f"No segmental "
+                f"{segment_choice.lower()} data is available."
+            )
+
+        st.subheader("Renpho health indicators")
+        health_options = {
+            "Visceral fat": (
+                "visceral_fat_index",
+                "Visceral fat index",
+            ),
+            "Subcutaneous fat": (
+                "subcutaneous_fat_pct",
+                "Subcutaneous fat (%)",
+            ),
+            "SMI": (
+                "smi_kg_m2",
+                "SMI (kg/m²)",
+            ),
+            "Waist-to-hip ratio": (
+                "waist_hip_ratio",
+                "Waist-to-hip ratio",
+            ),
+            "Body score": (
+                "body_score",
+                "Body score",
+            ),
+            "Metabolic age": (
+                "metabolic_age_years",
+                "Metabolic age (years)",
+            ),
+            "BMR": (
+                "bmr_kcal_day",
+                "BMR (kcal/day)",
+            ),
+        }
+
+        selected_health = st.selectbox(
+            "Health-indicator trend",
+            list(health_options.keys()),
+            key="renpho_health_metric",
+        )
+        health_column, health_label = health_options[
+            selected_health
+        ]
+        health_trend = renpho_history[
+            ["measured_at", health_column]
+        ].dropna(subset=[health_column]).copy()
+
+        if health_trend.empty:
+            st.info(
+                f"No {selected_health.lower()} data is available."
+            )
+        else:
+            health_fig = px.line(
+                health_trend,
+                x="measured_at",
+                y=health_column,
+                markers=True,
+                labels={
+                    "measured_at": "Renpho test date",
+                    health_column: health_label,
+                },
+            )
+            health_fig.update_layout(
+                height=390,
+                xaxis_tickformat="%d %b %Y",
+            )
+            st.plotly_chart(
+                health_fig,
+                use_container_width=True,
+            )
+
+        with st.expander("Bioelectrical impedance"):
+            impedance_columns = {
+                "20 kHz — Right arm": "z20_right_arm",
+                "20 kHz — Left arm": "z20_left_arm",
+                "20 kHz — Trunk": "z20_trunk",
+                "20 kHz — Right leg": "z20_right_leg",
+                "20 kHz — Left leg": "z20_left_leg",
+                "100 kHz — Right arm": "z100_right_arm",
+                "100 kHz — Left arm": "z100_left_arm",
+                "100 kHz — Trunk": "z100_trunk",
+                "100 kHz — Right leg": "z100_right_leg",
+                "100 kHz — Left leg": "z100_left_leg",
+            }
+            latest_impedance = []
+            for label, column in impedance_columns.items():
+                value = latest.get(column)
+                if pd.notna(value):
+                    latest_impedance.append(
+                        {
+                            "Measurement": label,
+                            "Impedance (Ω)": round(
+                                float(value),
+                                1,
+                            ),
+                        }
+                    )
+            if latest_impedance:
+                st.dataframe(
+                    pd.DataFrame(latest_impedance),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No impedance data is available.")
+
+        with st.expander("All Renpho records"):
+            display_columns = [
+                "measured_at",
+                "body_score",
+                "weight_kg",
+                "body_fat_pct",
+                "body_fat_mass_kg",
+                "skeletal_muscle_mass_kg",
+                "visceral_fat_index",
+                "bmr_kcal_day",
+                "smi_kg_m2",
+                "metabolic_age_years",
+                "waist_hip_ratio",
+                "notes",
+            ]
+            available = [
+                column
+                for column in display_columns
+                if column in renpho_history.columns
+            ]
+            st.dataframe(
+                renpho_history[
+                    available
+                ].sort_values(
+                    "measured_at",
+                    ascending=False,
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    st.subheader("Add monthly Renpho measurement")
+    st.caption(
+        "Enter values directly from the Renpho report. Blank optional fields "
+        "stay missing; they are never filled from another data source."
+    )
+
+    with st.form("renpho_monthly_entry"):
+        measured_date = st.date_input("Test date", value=datetime.now(ZoneInfo("Europe/Berlin")).date())
+        measured_time = st.time_input("Test time", value=datetime.now(ZoneInfo("Europe/Berlin")).time().replace(second=0,microsecond=0))
+
+        a=st.columns(4)
+        body_score=a[0].number_input("Body score",min_value=0.0,max_value=200.0,value=None,step=1.0)
+        weight_kg=a[1].number_input("Weight (kg)",min_value=0.0,value=None,step=0.1)
+        body_fat_pct=a[2].number_input("Body fat (%)",min_value=0.0,value=None,step=0.1)
+        body_fat_mass_kg=a[3].number_input("Body fat mass (kg)",min_value=0.0,value=None,step=0.1)
+
+        b=st.columns(4)
+        muscle_mass_kg=b[0].number_input("Muscle mass (kg)",min_value=0.0,value=None,step=0.1)
+        skeletal_muscle_mass_kg=b[1].number_input("Skeletal muscle mass (kg)",min_value=0.0,value=None,step=0.1)
+        fat_free_mass_kg=b[2].number_input("Fat-free mass (kg)",min_value=0.0,value=None,step=0.1)
+        body_water_mass_kg=b[3].number_input("Body water mass (kg)",min_value=0.0,value=None,step=0.1)
+
+        c=st.columns(4)
+        bone_mass_kg=c[0].number_input("Bone mass (kg)",min_value=0.0,value=None,step=0.1)
+        protein_mass_kg=c[1].number_input("Protein mass (kg)",min_value=0.0,value=None,step=0.1)
+        bmi=c[2].number_input("BMI",min_value=0.0,value=None,step=0.1)
+        obesity_assessment_pct=c[3].number_input("Obesity assessment (%)",min_value=0.0,value=None,step=1.0)
+
+        d=st.columns(4)
+        visceral_fat_index=d[0].number_input("Visceral fat index",min_value=0.0,value=None,step=0.1)
+        subcutaneous_fat_pct=d[1].number_input("Subcutaneous fat (%)",min_value=0.0,value=None,step=0.1)
+        bmr_kcal_day=d[2].number_input("BMR (kcal/day)",min_value=0.0,value=None,step=1.0)
+        smi_kg_m2=d[3].number_input("SMI (kg/m²)",min_value=0.0,value=None,step=0.1)
+
+        e=st.columns(2)
+        metabolic_age_years=e[0].number_input("Metabolic age (years)",min_value=0.0,value=None,step=1.0)
+        waist_hip_ratio=e[1].number_input("Waist-to-hip ratio",min_value=0.0,value=None,step=0.01,format="%.2f")
+
+        st.markdown("**Segmental fat mass (kg)**")
+        f=st.columns(5)
+        left_arm_fat_kg=f[0].number_input("Left arm fat",min_value=0.0,value=None,step=0.01)
+        right_arm_fat_kg=f[1].number_input("Right arm fat",min_value=0.0,value=None,step=0.01)
+        trunk_fat_kg=f[2].number_input("Trunk fat",min_value=0.0,value=None,step=0.01)
+        left_leg_fat_kg=f[3].number_input("Left leg fat",min_value=0.0,value=None,step=0.01)
+        right_leg_fat_kg=f[4].number_input("Right leg fat",min_value=0.0,value=None,step=0.01)
+
+        st.markdown("**Segmental muscle mass (kg)**")
+        g=st.columns(5)
+        left_arm_muscle_kg=g[0].number_input("Left arm muscle",min_value=0.0,value=None,step=0.01)
+        right_arm_muscle_kg=g[1].number_input("Right arm muscle",min_value=0.0,value=None,step=0.01)
+        trunk_muscle_kg=g[2].number_input("Trunk muscle",min_value=0.0,value=None,step=0.01)
+        left_leg_muscle_kg=g[3].number_input("Left leg muscle",min_value=0.0,value=None,step=0.01)
+        right_leg_muscle_kg=g[4].number_input("Right leg muscle",min_value=0.0,value=None,step=0.01)
+
+        with st.expander("Optional bioelectrical impedance (Ω)"):
+            h=st.columns(5)
+            z20_right_arm=h[0].number_input("20 kHz right arm",min_value=0.0,value=None,step=0.1)
+            z20_left_arm=h[1].number_input("20 kHz left arm",min_value=0.0,value=None,step=0.1)
+            z20_trunk=h[2].number_input("20 kHz trunk",min_value=0.0,value=None,step=0.1)
+            z20_right_leg=h[3].number_input("20 kHz right leg",min_value=0.0,value=None,step=0.1)
+            z20_left_leg=h[4].number_input("20 kHz left leg",min_value=0.0,value=None,step=0.1)
+            i=st.columns(5)
+            z100_right_arm=i[0].number_input("100 kHz right arm",min_value=0.0,value=None,step=0.1)
+            z100_left_arm=i[1].number_input("100 kHz left arm",min_value=0.0,value=None,step=0.1)
+            z100_trunk=i[2].number_input("100 kHz trunk",min_value=0.0,value=None,step=0.1)
+            z100_right_leg=i[3].number_input("100 kHz right leg",min_value=0.0,value=None,step=0.1)
+            z100_left_leg=i[4].number_input("100 kHz left leg",min_value=0.0,value=None,step=0.1)
+
+        notes=st.text_area("Notes")
+        save_renpho=st.form_submit_button("Save Renpho measurement")
+
+    if save_renpho:
+        measured_at=datetime.combine(measured_date,measured_time,tzinfo=ZoneInfo("Europe/Berlin"))
+        vals={k:v for k,v in locals().copy().items() if k in {
+            "body_score","weight_kg","body_fat_pct","body_fat_mass_kg","bone_mass_kg",
+            "protein_mass_kg","body_water_mass_kg","muscle_mass_kg","skeletal_muscle_mass_kg",
+            "fat_free_mass_kg","bmi","obesity_assessment_pct","visceral_fat_index",
+            "subcutaneous_fat_pct","bmr_kcal_day","smi_kg_m2","metabolic_age_years",
+            "waist_hip_ratio","left_arm_fat_kg","right_arm_fat_kg","trunk_fat_kg",
+            "left_leg_fat_kg","right_leg_fat_kg","left_arm_muscle_kg","right_arm_muscle_kg",
+            "trunk_muscle_kg","left_leg_muscle_kg","right_leg_muscle_kg","z20_right_arm",
+            "z20_left_arm","z20_trunk","z20_right_leg","z20_left_leg","z100_right_arm",
+            "z100_left_arm","z100_trunk","z100_right_leg","z100_left_leg","notes"
+        }}
+        try:
+            insert_renpho_measurement(measured_at,vals)
+            st.cache_data.clear()
+            st.success("Renpho measurement saved to the dedicated Renpho table.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not save Renpho measurement: {exc}")
 
 st.divider()
 st.caption(
