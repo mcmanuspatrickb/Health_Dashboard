@@ -700,7 +700,11 @@ def load_google_health_recovery(days: int = 30) -> pd.DataFrame:
 def load_google_health_body(days: int = 30) -> pd.DataFrame:
     client = GoogleHealthClient()
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
-    return load_body(client, today - timedelta(days=days), today)
+    return load_body(
+        client,
+        today - timedelta(days=days),
+        today + timedelta(days=1),
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -2387,12 +2391,28 @@ elif selected_section == "Body Composition & Nutrition":
             title_text="Date",
             tickformat="%d %b",
         )
+        weight_axis_range = None
+        if not weight_view.empty:
+            weight_values = pd.to_numeric(
+                weight_view["weight_kg"], errors="coerce"
+            ).dropna()
+            if not weight_values.empty:
+                weight_low = min(90.0, float(weight_values.min()))
+                weight_high = float(weight_values.max())
+                spread = max(5.0, weight_high - weight_low)
+                weight_axis_range = [
+                    max(0.0, weight_low - max(2.0, spread * 0.08)),
+                    weight_high + max(2.0, spread * 0.12),
+                ]
+
         overall_fig.update_yaxes(
             title_text="Weight (kg)",
+            range=weight_axis_range,
             secondary_y=False,
         )
         overall_fig.update_yaxes(
-            title_text="Body composition value",
+            title_text="Body fat / water (%)",
+            range=[0, 60],
             secondary_y=True,
         )
         overall_fig.update_layout(
