@@ -1227,8 +1227,7 @@ def trend_window(frame: pd.DataFrame, date_column: str = "date", days: int = 90)
 
 st.title("🏋️ Training, Recovery & Goal Dashboard")
 st.caption(
-    "Dashboard powered by Hevy, Fitbit/Google Health and Cronometer. "
-    "Direct Withings has been removed; body composition uses the Google Health mirror."
+    "Dashboard powered by Hevy, Google Health/Cronometer, and direct Withings metrics."
 )
 
 local_google_token = (
@@ -1389,7 +1388,6 @@ if selected_section == "Overview & Goals":
         alias_rules,
         proxy_config=body_proxy,
     )
-    body_calc = prepare_body_calculations(body, body_proxy)
 
 elif selected_section == "Workout Review":
     health_steps = safe_frame(
@@ -1477,7 +1475,6 @@ elif selected_section == "Body Composition & Nutrition":
         alias_rules,
         proxy_config=body_proxy,
     )
-    body_calc = prepare_body_calculations(body, body_proxy)
 
 elif selected_section == "Recovery & Data Quality":
     health_steps = safe_frame(
@@ -1536,7 +1533,7 @@ if selected_section == "Overview & Goals":
     )
     food_7 = food_logged.tail(7)
 
-    row1 = st.columns(5)
+    row1 = st.columns(4)
     row1[0].metric(
         "Current weight",
         f"{latest_weight:.2f} kg" if latest_weight is not None else "—",
@@ -1549,21 +1546,8 @@ if selected_section == "Overview & Goals":
         f"{latest_fat - 15:+.1f} pp to <15%" if latest_fat is not None else None,
         delta_color="inverse",
     )
-    latest_mm_pct = (
-        float(body_calc.iloc[-1]["estimated_muscle_mass_pct_7d_median"])
-        if not body_calc.empty
-        and pd.notna(body_calc.iloc[-1]["estimated_muscle_mass_pct_7d_median"])
-        else None
-    )
-    row1[2].metric(
-        "Estimated MM — 7d median",
-        f"{latest_mm_pct:.2f}%" if latest_mm_pct is not None else "—",
-        f"{latest_mm_pct - 80:+.1f} pp vs >80%"
-        if latest_mm_pct is not None
-        else None,
-    )
-    row1[3].metric("Workouts — last 7 days", len(week_sessions))
-    row1[4].metric(
+    row1[2].metric("Workouts — last 7 days", len(week_sessions))
+    row1[3].metric(
         "Weekly session load",
         (
             f"{pd.to_numeric(week_sessions.get('session_load'), errors='coerce').sum():,.0f}"
@@ -2249,476 +2233,140 @@ elif selected_section == "Endurance":
 elif selected_section == "Body Composition & Nutrition":
     st.header("Body composition and nutrition")
 
-    st.subheader("Google Health body composition")
+    st.subheader("Overall Health Trends")
+    st.caption(
+        "Weight and body-fat percentage use Google Health. Muscle mass %, water %, "
+        "visceral fat, and metabolic age use direct Withings measurements."
+    )
+
     latest_weight = latest_value(body, "weight_kg")
     latest_fat = latest_value(body, "body_fat_pct")
-    latest_paired = body_calc.iloc[-1] if not body_calc.empty else None
-    bone_baseline = float(body_proxy["bone_mass_baseline_kg"])
+    direct_muscle_pct = latest_withings_value(
+        withings_scale, "muscle_mass_pct"
+    )
+    water_pct = latest_withings_value(
+        withings_scale, "water_pct"
+    )
+    visceral = latest_withings_value(
+        withings_scale, "visceral_fat_index"
+    )
+    metabolic_age = latest_withings_value(
+        withings_scale, "metabolic_age_years"
+    )
 
-    b = st.columns(5)
-    b[0].metric(
+    health_cards = st.columns(6)
+    health_cards[0].metric(
         "Weight",
         f"{latest_weight:.2f} kg" if latest_weight is not None else "—",
         f"{latest_weight - 90:+.1f} kg to <90"
-        if latest_weight is not None
-        else None,
+        if latest_weight is not None else None,
         delta_color="inverse",
     )
-    b[1].metric(
-        "Body fat",
+    health_cards[1].metric(
+        "Body fat %",
         f"{latest_fat:.2f}%" if latest_fat is not None else "—",
         f"{latest_fat - 15:+.1f} pp to <15%"
-        if latest_fat is not None
-        else None,
+        if latest_fat is not None else None,
         delta_color="inverse",
     )
-    b[2].metric(
-        "Calculated fat mass",
-        f"{latest_paired['calculated_fat_mass_kg']:.2f} kg"
-        if latest_paired is not None
-        else "—",
+    health_cards[2].metric(
+        "Muscle mass %",
+        f"{direct_muscle_pct:.2f}%"
+        if direct_muscle_pct is not None else "—",
     )
-    b[3].metric(
-        "Estimated muscle mass",
-        f"{latest_paired['estimated_muscle_mass_kg']:.2f} kg"
-        if latest_paired is not None
-        else "—",
+    health_cards[3].metric(
+        "Water %",
+        f"{water_pct:.1f}%" if water_pct is not None else "—",
     )
-    b[4].metric(
-        "Estimated muscle mass %",
-        f"{latest_paired['estimated_muscle_mass_pct_7d_median']:.2f}%"
-        if latest_paired is not None
-        else "—",
-        f"{latest_paired['estimated_muscle_mass_pct_7d_median'] - 80:+.1f} pp vs >80%"
-        if latest_paired is not None
-        else None,
+    health_cards[4].metric(
+        "Visceral fat",
+        f"{visceral:.1f}" if visceral is not None else "—",
+    )
+    health_cards[5].metric(
+        "Metabolic age",
+        f"{metabolic_age:.0f} years"
+        if metabolic_age is not None else "—",
     )
 
-    if body.empty:
-        st.info("No body-composition data is available.")
+    health_trend_defs = {
+        "Weight": (body, "weight_kg", "kg"),
+        "Body fat %": (body, "body_fat_pct", "%"),
+        "Muscle mass %": (withings_scale, "muscle_mass_pct", "%"),
+        "Water %": (withings_scale, "water_pct", "%"),
+        "Visceral fat": (withings_scale, "visceral_fat_index", "index"),
+        "Metabolic age": (withings_scale, "metabolic_age_years", "years"),
+    }
+
+    selected_health_metric = st.selectbox(
+        "Health metric trend",
+        list(health_trend_defs.keys()),
+        index=0,
+        key="overall_health_metric_trend",
+    )
+    metric_source, metric_column, metric_unit = health_trend_defs[
+        selected_health_metric
+    ]
+
+    if metric_source.empty or metric_column not in metric_source.columns:
+        st.info(
+            f"No {selected_health_metric.lower()} data is available."
+        )
     else:
-        period_start = (
-            datetime.now(ZoneInfo("Europe/Berlin")).date()
-            - timedelta(days=trend_days)
-        )
-        body_dates = pd.to_datetime(body["date"], errors="coerce").dt.date
-        trend = body[body_dates >= period_start].copy()
-
-        calc_trend = body_calc.copy()
-        if not calc_trend.empty:
-            calc_dates = pd.to_datetime(
-                calc_trend["date"], errors="coerce"
-            ).dt.date
-            calc_trend = calc_trend[calc_dates >= period_start].copy()
-
-        st.subheader("Overall Trends")
-        st.caption(
-            "Weight uses the left axis. Body fat and estimated muscle-mass "
-            "percentage use the right axis."
+        metric_trend = metric_source[
+            ["date", metric_column]
+        ].dropna(subset=[metric_column]).copy()
+        metric_trend = trend_window(
+            metric_trend,
+            "date",
+            trend_days,
         )
 
-        weight_view = trend.dropna(subset=["weight_kg"])[
-            ["date", "weight_kg"]
-        ].copy()
-        fat_view = trend.dropna(subset=["body_fat_pct"])[
-            ["date", "body_fat_pct"]
-        ].copy()
-
-        mm_view = pd.DataFrame()
-        if not calc_trend.empty:
-            mm_view = calc_trend.dropna(
-                subset=["estimated_muscle_mass_pct_7d_median"]
-            )[
-                ["date", "estimated_muscle_mass_pct_7d_median"]
-            ].copy()
-
-        if weight_view.empty and fat_view.empty and mm_view.empty:
+        if metric_trend.empty:
             st.info(
-                "No weight, body-fat, or estimated muscle-mass percentage "
-                "data is available for the selected period."
+                f"No {selected_health_metric.lower()} data is available "
+                f"in the selected {trend_days}-day period."
             )
         else:
-            overall_fig = make_subplots(
-                specs=[[{"secondary_y": True}]]
-            )
-
-            if not weight_view.empty:
-                overall_fig.add_trace(
-                    go.Scatter(
-                        x=weight_view["date"],
-                        y=weight_view["weight_kg"],
-                        mode="lines+markers",
-                        name="Weight (kg)",
-                        hovertemplate=(
-                            "%{x|%d %b %Y}<br>"
-                            "Weight: %{y:.2f} kg<extra></extra>"
-                        ),
+            health_fig = px.line(
+                metric_trend,
+                x="date",
+                y=metric_column,
+                markers=True,
+                labels={
+                    "date": "Date",
+                    metric_column: (
+                        f"{selected_health_metric} ({metric_unit})"
                     ),
-                    secondary_y=False,
-                )
-
-            if not fat_view.empty:
-                overall_fig.add_trace(
-                    go.Scatter(
-                        x=fat_view["date"],
-                        y=fat_view["body_fat_pct"],
-                        mode="lines+markers",
-                        name="Body fat (%)",
-                        hovertemplate=(
-                            "%{x|%d %b %Y}<br>"
-                            "Body fat: %{y:.2f}%<extra></extra>"
-                        ),
-                    ),
-                    secondary_y=True,
-                )
-
-            if not mm_view.empty:
-                overall_fig.add_trace(
-                    go.Scatter(
-                        x=mm_view["date"],
-                        y=mm_view[
-                            "estimated_muscle_mass_pct_7d_median"
-                        ],
-                        mode="lines",
-                        name="Estimated muscle mass % — 7d median",
-                        hovertemplate=(
-                            "%{x|%d %b %Y}<br>"
-                            "Estimated muscle mass: %{y:.2f}%"
-                            "<extra></extra>"
-                        ),
-                    ),
-                    secondary_y=True,
-                )
-
-            overall_fig.add_shape(
-                type="line",
-                xref="paper",
-                x0=0,
-                x1=1,
-                yref="y",
-                y0=90,
-                y1=90,
-                line={"dash": "dash", "width": 2},
-            )
-            overall_fig.add_annotation(
-                x=1,
-                xref="paper",
-                y=90,
-                yref="y",
-                text="90 kg goal",
-                showarrow=False,
-                xanchor="right",
-                yanchor="bottom",
-            )
-
-            overall_fig.add_shape(
-                type="line",
-                xref="paper",
-                x0=0,
-                x1=1,
-                yref="y2",
-                y0=15,
-                y1=15,
-                line={"dash": "dash", "width": 2},
-            )
-            overall_fig.add_annotation(
-                x=1,
-                xref="paper",
-                y=15,
-                yref="y2",
-                text="15% body-fat goal",
-                showarrow=False,
-                xanchor="right",
-                yanchor="bottom",
-            )
-
-            overall_fig.add_shape(
-                type="line",
-                xref="paper",
-                x0=0,
-                x1=1,
-                yref="y2",
-                y0=80,
-                y1=80,
-                line={"dash": "dash", "width": 2},
-            )
-            overall_fig.add_annotation(
-                x=1,
-                xref="paper",
-                y=80,
-                yref="y2",
-                text="MM >80% goal",
-                showarrow=False,
-                xanchor="right",
-                yanchor="bottom",
-            )
-
-            overall_fig.update_xaxes(
-                title_text="Date",
-                tickformat="%d %b",
-            )
-            overall_fig.update_yaxes(
-                title_text="Weight (kg)",
-                secondary_y=False,
-            )
-            overall_fig.update_yaxes(
-                title_text="Body fat / estimated muscle mass (%)",
-                secondary_y=True,
-            )
-            overall_fig.update_layout(
-                height=540,
-                margin={"l": 55, "r": 65, "t": 60, "b": 55},
-                legend={
-                    "orientation": "h",
-                    "yanchor": "bottom",
-                    "y": 1.02,
-                    "xanchor": "center",
-                    "x": 0.5,
                 },
-                hovermode="x unified",
+            )
+            if selected_health_metric == "Weight":
+                health_fig.add_hline(
+                    y=90,
+                    line_dash="dash",
+                    annotation_text="90 kg goal",
+                )
+            elif selected_health_metric == "Body fat %":
+                health_fig.add_hline(
+                    y=15,
+                    line_dash="dash",
+                    annotation_text="15% body-fat goal",
+                )
+            health_fig.update_layout(
+                height=410,
+                xaxis_tickformat="%d %b %Y",
             )
             st.plotly_chart(
-                overall_fig,
+                health_fig,
                 use_container_width=True,
             )
 
-            summary_parts = []
-            if len(weight_view) >= 2:
-                first_weight = float(weight_view.iloc[0]["weight_kg"])
-                last_weight = float(weight_view.iloc[-1]["weight_kg"])
-                weight_change = last_weight - first_weight
-                pct_change = (
-                    weight_change / first_weight * 100
-                    if first_weight
-                    else None
-                )
-                summary_parts.append(
-                    "weight "
-                    f"{weight_change:+.1f} kg"
-                    + (
-                        f" ({pct_change:+.1f}%)"
-                        if pct_change is not None
-                        else ""
-                    )
-                )
-            if len(fat_view) >= 2:
-                first_fat = float(fat_view.iloc[0]["body_fat_pct"])
-                last_fat = float(fat_view.iloc[-1]["body_fat_pct"])
-                summary_parts.append(
-                    f"body fat {last_fat - first_fat:+.1f} pp"
-                )
-            if len(mm_view) >= 2:
-                first_mm = float(
-                    mm_view.iloc[0][
-                        "estimated_muscle_mass_pct_7d_median"
-                    ]
-                )
-                last_mm = float(
-                    mm_view.iloc[-1][
-                        "estimated_muscle_mass_pct_7d_median"
-                    ]
-                )
-                summary_parts.append(
-                    f"estimated muscle mass {last_mm - first_mm:+.1f} pp"
-                )
-
-            if summary_parts:
-                st.caption(
-                    "Over the selected period: "
-                    + ", ".join(summary_parts)
-                    + "."
-                )
-
-        if not body_calc.empty:
-            latest_mm = float(
-                body_calc.iloc[-1]["estimated_muscle_mass_kg_7d_median"]
-            )
-            earlier_mm = value_28_days_earlier(
-                body_calc,
-                "estimated_muscle_mass_kg_7d_median",
-            )
-            if earlier_mm is not None:
-                st.caption(
-                    f"28-day estimated muscle-mass change: "
-                    f"{latest_mm - earlier_mm:+.2f} kg."
-                )
-
-        st.caption(
-            f"Estimated muscle mass = weight − calculated fat mass − "
-            f"{bone_baseline:.2f} kg fixed bone-mass baseline. "
-            "Trends use a 7-day rolling median. "
-            "This is a Withings-compatible proxy, not a direct skeletal-muscle measurement."
-        )
-
-    st.subheader("Withings advanced body composition")
-    st.caption(
-        "Direct Withings scale metrics. These complement Google Health "
-        "weight/body-fat trends and Hevy tape measurements."
+    source_mode = withings_measurements.attrs.get(
+        "source_mode", "unknown"
     )
-
-    if withings_scale.empty:
-        st.info(
-            "No Withings advanced body-composition data is available. "
-            "Local mode uses private/withings_token.json; cloud mode uses "
-            "WITHINGS_DATABASE_URL."
-        )
-    else:
-        direct_muscle = latest_withings_value(
-            withings_scale, "muscle_mass_kg"
-        )
-        direct_muscle_pct = latest_withings_value(
-            withings_scale, "muscle_mass_pct"
-        )
-        visceral = latest_withings_value(
-            withings_scale, "visceral_fat_index"
-        )
-        water_pct = latest_withings_value(
-            withings_scale, "water_pct"
-        )
-        bmr = latest_withings_value(
-            withings_scale, "bmr_kcal_day"
-        )
-
-        w = st.columns(5)
-        w[0].metric(
-            "Direct muscle mass",
-            f"{direct_muscle:.2f} kg"
-            if direct_muscle is not None else "—",
-        )
-        w[1].metric(
-            "Direct muscle mass %",
-            f"{direct_muscle_pct:.2f}%"
-            if direct_muscle_pct is not None else "—",
-            f"{direct_muscle_pct - 80:+.1f} pp vs >80%"
-            if direct_muscle_pct is not None else None,
-        )
-        w[2].metric(
-            "Visceral fat index",
-            f"{visceral:.1f}" if visceral is not None else "—",
-        )
-        w[3].metric(
-            "Water %",
-            f"{water_pct:.1f}%"
-            if water_pct is not None else "—",
-        )
-        w[4].metric(
-            "BMR",
-            f"{bmr:,.0f} kcal/day"
-            if bmr is not None else "—",
-        )
-
-        trend_defs = {
-            "Muscle mass %": ("muscle_mass_pct", "%"),
-            "Muscle mass": ("muscle_mass_kg", "kg"),
-            "Fat-free mass": ("fat_free_mass_kg", "kg"),
-            "Fat mass": ("fat_mass_kg", "kg"),
-            "Visceral fat": ("visceral_fat_index", "index"),
-            "Water %": ("water_pct", "%"),
-            "BMR": ("bmr_kcal_day", "kcal/day"),
-            "Vascular age": ("vascular_age_years", "years"),
-            "Pulse wave velocity": ("pwv_m_s", "m/s"),
-            "Nerve Health Score": ("nerve_health_score", "score"),
-            "Metabolic age": ("metabolic_age_years", "years"),
-        }
-
-        selected_withings_metric = st.selectbox(
-            "Withings metric trend",
-            list(trend_defs.keys()),
-            index=0,
-            key="withings_metric_trend",
-        )
-        metric_column, metric_unit = trend_defs[
-            selected_withings_metric
-        ]
-
-        if metric_column not in withings_scale.columns:
-            st.info(
-                f"No {selected_withings_metric.lower()} data is available."
-            )
-        else:
-            metric_trend = withings_scale[
-                ["date", metric_column]
-            ].dropna(subset=[metric_column]).copy()
-            metric_trend = trend_window(metric_trend, "date", trend_days)
-
-            if metric_trend.empty:
-                st.info(
-                    f"No {selected_withings_metric.lower()} data is available."
-                )
-            else:
-                fig = px.line(
-                    metric_trend,
-                    x="date",
-                    y=metric_column,
-                    markers=True,
-                    labels={
-                        "date": "Date",
-                        metric_column: (
-                            f"{selected_withings_metric} ({metric_unit})"
-                        ),
-                    },
-                )
-                if selected_withings_metric == "Muscle mass %":
-                    fig.add_hline(
-                        y=80,
-                        line_dash="dash",
-                        annotation_text="MM >80% goal",
-                    )
-                fig.update_layout(
-                    height=390,
-                    xaxis_tickformat="%d %b %Y",
-                )
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True,
-                )
-
-        with st.expander(
-            "Additional Withings metrics",
-            expanded=False,
-        ):
-            latest_row = (
-                withings_scale.sort_values("date").iloc[-1]
-            )
-            extras = []
-            for label, column, unit in [
-                ("Fat-free mass", "fat_free_mass_kg", "kg"),
-                ("Fat mass", "fat_mass_kg", "kg"),
-                ("Bone mass", "bone_mass_kg", "kg"),
-                ("Vascular age", "vascular_age_years", "years"),
-                ("Pulse wave velocity", "pwv_m_s", "m/s"),
-                ("Nerve Health Score", "nerve_health_score", ""),
-                ("Metabolic age", "metabolic_age_years", "years"),
-                ("Extracellular water", "extracellular_water_kg", "kg"),
-                ("Intracellular water", "intracellular_water_kg", "kg"),
-            ]:
-                value = latest_withings_value(
-                    withings_scale, column
-                )
-                if value is not None:
-                    extras.append(
-                        {
-                            "Metric": label,
-                            "Latest": round(value, 3),
-                            "Unit": unit,
-                        }
-                    )
-            if extras:
-                st.dataframe(
-                    pd.DataFrame(extras),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.info("No additional Withings metrics are available.")
-
-        source_mode = withings_measurements.attrs.get(
-            "source_mode", "unknown"
-        )
-        st.caption(
-            f"Withings source mode: {source_mode}. "
-            "Persistent-database mode is the intended Streamlit Cloud setup."
-        )
+    st.caption(
+        f"Withings source mode: {source_mode}. "
+        f"Trend chart window: {trend_days} days."
+    )
 
     st.subheader("Body measurements")
     st.caption(
@@ -4136,5 +3784,5 @@ elif selected_section == "Renpho":
 
 st.divider()
 st.caption(
-    "Goal comparisons are descriptive training tools. Estimated 1RM, calculated fat mass, the Withings-compatible muscle-mass proxy, and recovery associations are estimates, not medical assessments."
+    "Goal comparisons are descriptive training tools. Estimated 1RM and recovery associations are estimates, not medical assessments."
 )

@@ -4,9 +4,7 @@
     "Goals updated from the user's July 2026 editable goals workbook.",
     "Primary strength goals now use absolute 3-to-5-rep working-load references rather than body-weight-ratio targets.",
     "Estimated 1RM remains available as a Strength Progress trend metric but is no longer a goal target.",
-    "Farmer-carry weight is assumed to be entered per hand in Hevy.",
-    "MM means estimated muscle-mass percentage.",
-    "Estimated muscle mass uses a fixed 3.87 kg bone-mass baseline from the latest direct Withings measurement."
+    "Farmer-carry weight is assumed to be entered per hand in Hevy."
   ],
   "goals": [
     {
@@ -30,17 +28,6 @@
       "unit": "%",
       "target_display": "<15%",
       "note": "Google Health body-fat percentage."
-    },
-    {
-      "id": "muscle_mass_percent",
-      "category": "Body Composition",
-      "goal": "Estimated muscle mass percentage",
-      "metric": "estimated_muscle_mass_pct",
-      "target": 80,
-      "direction": "minimum",
-      "unit": "%",
-      "target_display": ">80%",
-      "note": "Withings-compatible proxy using Google Health weight/body fat and fixed 3.87 kg bone mass."
     },
     {
       "id": "back_squat",
