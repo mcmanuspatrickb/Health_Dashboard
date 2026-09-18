@@ -2303,8 +2303,6 @@ elif selected_section == "Body Composition & Nutrition":
     for label, column, unit in [
         ("Muscle mass %", "muscle_mass_pct", "%"),
         ("Water %", "water_pct", "%"),
-        ("Visceral fat", "visceral_fat_index", "index"),
-        ("Metabolic age", "metabolic_age_years", "years"),
     ]:
         if not withings_scale.empty and column in withings_scale.columns:
             frame = withings_scale[["date", column]].dropna(subset=[column]).copy()
@@ -2425,18 +2423,21 @@ elif selected_section == "Body Composition & Nutrition":
     if withings_measurements.empty:
         st.info("No direct Withings measurements are available.")
     else:
-        direct_muscle = latest_withings_value(
-            withings_scale, "muscle_mass_kg"
+        fat_mass = latest_withings_value(
+            withings_scale, "fat_mass_kg"
+        )
+        fat_free_mass = latest_withings_value(
+            withings_scale, "fat_free_mass_kg"
         )
         bmr = latest_withings_value(
             withings_scale, "bmr_kcal_day"
         )
 
-        withings_cards = st.columns(5)
+        withings_cards = st.columns(4)
         withings_cards[0].metric(
-            "Direct muscle mass",
-            f"{direct_muscle:.2f} kg"
-            if direct_muscle is not None else "—",
+            "Fat mass",
+            f"{fat_mass:.2f} kg"
+            if fat_mass is not None else "—",
         )
         withings_cards[1].metric(
             "Direct muscle mass %",
@@ -2444,14 +2445,11 @@ elif selected_section == "Body Composition & Nutrition":
             if direct_muscle_pct is not None else "—",
         )
         withings_cards[2].metric(
-            "Visceral fat index",
-            f"{visceral:.1f}" if visceral is not None else "—",
+            "Fat-free mass",
+            f"{fat_free_mass:.2f} kg"
+            if fat_free_mass is not None else "—",
         )
         withings_cards[3].metric(
-            "Water %",
-            f"{water_pct:.1f}%" if water_pct is not None else "—",
-        )
-        withings_cards[4].metric(
             "BMR",
             f"{bmr:,.0f} kcal/day" if bmr is not None else "—",
         )
