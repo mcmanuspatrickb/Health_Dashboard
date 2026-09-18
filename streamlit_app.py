@@ -671,7 +671,22 @@ def load_google_health_steps(days: int = 14) -> pd.DataFrame:
     today = datetime.now(ZoneInfo("Europe/Berlin")).date()
     end_date = today - timedelta(days=1)
     start_date = end_date - timedelta(days=days - 1)
-    return load_steps(client, start_date, end_date)
+
+    chunks = []
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(chunk_start + timedelta(days=89), end_date)
+        chunks.append(load_steps(client, chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+
+    if not chunks:
+        return pd.DataFrame(columns=["date", "steps"])
+    return (
+        pd.concat(chunks, ignore_index=True)
+        .drop_duplicates(subset=["date"], keep="last")
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1201,6 +1216,15 @@ def source_quality_row(label, frame, date_column="date", expected_days=None):
     }
 
 
+def trend_window(frame: pd.DataFrame, date_column: str = "date", days: int = 90) -> pd.DataFrame:
+    """Filter a time series to the selected dashboard trend period."""
+    if frame.empty or date_column not in frame.columns:
+        return frame.copy()
+    cutoff = datetime.now(ZoneInfo("Europe/Berlin")).date() - timedelta(days=int(days))
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    return frame.loc[dates.notna() & dates.dt.date.ge(cutoff)].copy()
+
+
 st.title("🏋️ Training, Recovery & Goal Dashboard")
 st.caption(
     "Dashboard powered by Hevy, Fitbit/Google Health and Cronometer. "
@@ -1252,10 +1276,15 @@ with st.sidebar:
         help="Use a larger value when you want longer exercise histories.",
     )
     trend_days = st.selectbox(
-        "Default trend period",
+        "Trend period (charts)",
         [30, 60, 90, 180, 365],
         index=2,
+        help=(
+            "Controls the visible time window for trend charts. Fixed 7-day "
+            "summary metrics and 28-day recovery baselines keep their own windows."
+        ),
     )
+    trend_days = int(trend_days)
     if st.button("Refresh cached data"):
         st.cache_data.clear()
         st.rerun()
@@ -1333,22 +1362,22 @@ body_calc = pd.DataFrame()
 if selected_section == "Overview & Goals":
     health_steps = safe_frame(
         "Google Health steps",
-        lambda: load_google_health_steps(days=90),
+        lambda: load_google_health_steps(days=trend_days),
         source_status,
     )
     sleep = safe_frame(
         "Google Health sleep",
-        lambda: load_google_health_sleep(days=90),
+        lambda: load_google_health_sleep(days=trend_days),
         source_status,
     )
     body = safe_frame(
         "Google Health body composition",
-        lambda: load_google_health_body(days=90),
+        lambda: load_google_health_body(days=trend_days),
         source_status,
     )
     nutrition = safe_frame(
         "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
+        lambda: load_google_health_nutrition(days=trend_days),
         source_status,
     )
     # Endurance history is intentionally deferred to the Endurance section.
@@ -1419,12 +1448,12 @@ elif selected_section == "Body Composition & Nutrition":
     )
     nutrition = safe_frame(
         "Cronometer nutrition",
-        lambda: load_google_health_nutrition(days=90),
+        lambda: load_google_health_nutrition(days=trend_days),
         source_status,
     )
     endurance = safe_frame(
         "Google Health endurance sessions",
-        lambda: load_google_health_endurance_sessions(days=90),
+        lambda: load_google_health_endurance_sessions(days=max(90, trend_days)),
         source_status,
     )
     hevy_measurements = safe_frame(
@@ -1453,17 +1482,17 @@ elif selected_section == "Body Composition & Nutrition":
 elif selected_section == "Recovery & Data Quality":
     health_steps = safe_frame(
         "Google Health steps",
-        lambda: load_google_health_steps(days=90),
+        lambda: load_google_health_steps(days=max(14, trend_days)),
         source_status,
     )
     recovery = safe_frame(
         "Google Health recovery",
-        lambda: load_google_health_recovery(days=90),
+        lambda: load_google_health_recovery(days=trend_days + 28),
         source_status,
     )
     sleep = safe_frame(
         "Google Health sleep",
-        lambda: load_google_health_sleep(days=90),
+        lambda: load_google_health_sleep(days=trend_days + 28),
         source_status,
     )
     withings_measurements = safe_frame(
@@ -1639,12 +1668,12 @@ if selected_section == "Overview & Goals":
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Latest 30 days — activity")
+        st.subheader(f"Latest {trend_days} days — activity")
         if health_steps.empty:
             st.info("No step data available.")
         else:
             fig = px.bar(
-                health_steps.tail(30),
+                trend_window(health_steps, "date", trend_days),
                 x="date",
                 y="steps",
                 labels={"date": "Date", "steps": "Steps"},
@@ -1653,12 +1682,12 @@ if selected_section == "Overview & Goals":
             fig.update_layout(height=320, xaxis_tickformat="%d %b")
             st.plotly_chart(fig, use_container_width=True)
     with right:
-        st.subheader("Latest 30 days — training load")
+        st.subheader(f"Latest {trend_days} days — training load")
         if session_summary.empty:
             st.info("No session-load history available.")
         else:
             load_chart = session_summary.dropna(subset=["session_load"]).copy()
-            load_chart = load_chart.sort_values("start_time").tail(30)
+            load_chart = trend_window(load_chart.sort_values("start_time"), "start_time", trend_days)
             if load_chart.empty:
                 st.info("Add session RPE to workout descriptions to calculate session load.")
             else:
@@ -1828,6 +1857,7 @@ elif selected_section == "Workout Review":
 
 elif selected_section == "Strength Progress":
     st.header("Strength progress")
+    performance_history = trend_window(performance_history, "start_time", trend_days)
     if performance_history.empty:
         st.info("No working-set performance history is available.")
     else:
@@ -1835,7 +1865,7 @@ elif selected_section == "Strength Progress":
         selected_exercise = st.selectbox("Exercise", exercises)
         history = performance_history[
             performance_history["exercise"] == selected_exercise
-        ].sort_values("start_time").tail(20)
+        ].sort_values("start_time")
 
         latest = history.iloc[-1]
         e1rm_delta = (
@@ -1969,8 +1999,9 @@ elif selected_section == "Endurance":
             activity["average_hr"], errors="coerce"
         )
         activity = activity.dropna(subset=["date"]).sort_values("date")
+        activity = trend_window(activity, "date", trend_days)
 
-        st.subheader(f"{activity_labels[selected_activity]} summary")
+        st.subheader(f"{activity_labels[selected_activity]} summary — last {trend_days} days")
 
         if activity.empty:
             st.info(
@@ -2579,6 +2610,8 @@ elif selected_section == "Body Composition & Nutrition":
         trend_defs = {
             "Muscle mass %": ("muscle_mass_pct", "%"),
             "Muscle mass": ("muscle_mass_kg", "kg"),
+            "Fat-free mass": ("fat_free_mass_kg", "kg"),
+            "Fat mass": ("fat_mass_kg", "kg"),
             "Visceral fat": ("visceral_fat_index", "index"),
             "Water %": ("water_pct", "%"),
             "BMR": ("bmr_kcal_day", "kcal/day"),
@@ -2606,6 +2639,7 @@ elif selected_section == "Body Composition & Nutrition":
             metric_trend = withings_scale[
                 ["date", metric_column]
             ].dropna(subset=[metric_column]).copy()
+            metric_trend = trend_window(metric_trend, "date", trend_days)
 
             if metric_trend.empty:
                 st.info(
@@ -2781,6 +2815,7 @@ elif selected_section == "Body Composition & Nutrition":
             hevy_measurements,
             selected_measurement,
         )
+        measurement_long = trend_window(measurement_long, "date", trend_days)
 
         if measurement_long.empty:
             st.info(
@@ -2854,8 +2889,8 @@ elif selected_section == "Body Composition & Nutrition":
                 )
 
         st.caption(
-            "Measurement charts use all available Hevy tape-measure history "
-            "because circumference entries are less frequent than weight measurements."
+            f"Measurement charts show the selected {trend_days}-day trend period. "
+            "Current/latest cards still use all available Hevy history."
         )
 
         with st.expander(
@@ -2941,7 +2976,7 @@ elif selected_section == "Body Composition & Nutrition":
             ordered=True,
         )
 
-        recent = logged.sort_values("date_only").tail(30)
+        recent = trend_window(logged.sort_values("date_only"), "date", trend_days)
         seven = logged.sort_values("date_only").tail(7)
 
         n = st.columns(4)
@@ -2964,7 +2999,7 @@ elif selected_section == "Body Composition & Nutrition":
             if protein_per_kg
             else "—",
         )
-        n[3].metric("Logged days — last 30", len(recent))
+        n[3].metric(f"Logged days — last {trend_days}", len(recent))
 
         nutrition_chart, nutrition_summary = st.columns([2, 1])
 
@@ -3059,7 +3094,7 @@ elif selected_section == "Recovery & Data Quality":
         if recovery.empty:
             st.info("No recovery data available.")
         else:
-            recent = recovery.tail(60).copy()
+            recent = recovery.sort_values("date").copy()
             recent["rhr_28d"] = pd.to_numeric(
                 recent["resting_hr"],
                 errors="coerce",
@@ -3068,6 +3103,7 @@ elif selected_section == "Recovery & Data Quality":
                 recent["hrv_ms"],
                 errors="coerce",
             ).rolling(28, min_periods=7).mean()
+            recent = trend_window(recent, "date", trend_days)
 
             rhr_fig = px.line(
                 recent,
@@ -3104,7 +3140,7 @@ elif selected_section == "Recovery & Data Quality":
     with sleep_right:
         st.subheader("Sleep consistency")
         main_sleep = (
-            sleep.dropna(subset=["sleep_hours"]).tail(60).copy()
+            sleep.dropna(subset=["sleep_hours"]).sort_values("date").copy()
             if not sleep.empty
             else pd.DataFrame()
         )
@@ -3115,6 +3151,7 @@ elif selected_section == "Recovery & Data Quality":
                 main_sleep["sleep_hours"],
                 errors="coerce",
             ).rolling(28, min_periods=7).mean()
+            main_sleep = trend_window(main_sleep, "date", trend_days)
 
             fig = px.line(
                 main_sleep,
@@ -3132,7 +3169,7 @@ elif selected_section == "Recovery & Data Quality":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            stages = main_sleep.tail(30)[
+            stages = main_sleep[
                 ["date", "deep_minutes", "rem_minutes", "light_minutes"]
             ].melt(
                 id_vars="date",
@@ -3191,7 +3228,7 @@ elif selected_section == "Recovery & Data Quality":
             ),
         )
 
-        bp_recent = withings_bp.sort_values("date").tail(60).copy()
+        bp_recent = trend_window(withings_bp.sort_values("date"), "date", trend_days)
         bp_long = bp_recent[
             ["date", "systolic_mm_hg", "diastolic_mm_hg"]
         ].melt(
@@ -3334,6 +3371,7 @@ elif selected_section == "Renpho":
         renpho_history = renpho_measurements.sort_values(
             "measured_at"
         ).copy()
+        renpho_trend_history = trend_window(renpho_history, "measured_at", trend_days)
         latest = renpho_history.iloc[-1]
         previous = (
             renpho_history.iloc[-2]
@@ -3561,7 +3599,7 @@ elif selected_section == "Renpho":
                     specs=[[{"secondary_y": True}]]
                 )
 
-                weight_data = renpho_history.dropna(
+                weight_data = renpho_trend_history.dropna(
                     subset=["weight_kg"]
                 )
                 if not weight_data.empty:
@@ -3575,7 +3613,7 @@ elif selected_section == "Renpho":
                         secondary_y=False,
                     )
 
-                muscle_data = renpho_history.dropna(
+                muscle_data = renpho_trend_history.dropna(
                     subset=["skeletal_muscle_mass_kg"]
                 )
                 if not muscle_data.empty:
@@ -3591,7 +3629,7 @@ elif selected_section == "Renpho":
                         secondary_y=False,
                     )
 
-                fat_pct_data = renpho_history.dropna(
+                fat_pct_data = renpho_trend_history.dropna(
                     subset=["body_fat_pct"]
                 )
                 if not fat_pct_data.empty:
@@ -3643,7 +3681,7 @@ elif selected_section == "Renpho":
                 ]
                 if column in renpho_history.columns
             ]
-            mass_trend = renpho_history[
+            mass_trend = renpho_trend_history[
                 ["measured_at"] + mass_columns
             ].copy()
 
@@ -3826,7 +3864,7 @@ elif selected_section == "Renpho":
             }
 
         segment_rows = []
-        for _, row in renpho_history.iterrows():
+        for _, row in renpho_trend_history.iterrows():
             for segment_name, column in segment_columns.items():
                 if (
                     column in row.index
@@ -3910,7 +3948,7 @@ elif selected_section == "Renpho":
         health_column, health_label = health_options[
             selected_health
         ]
-        health_trend = renpho_history[
+        health_trend = renpho_trend_history[
             ["measured_at", health_column]
         ].dropna(subset=[health_column]).copy()
 
