@@ -1229,9 +1229,33 @@ def trend_window(frame: pd.DataFrame, date_column: str = "date", days: int = 90)
     return frame.loc[dates.notna() & dates.dt.date.ge(cutoff)].copy()
 
 
+def withings_body_source(scale: pd.DataFrame) -> pd.DataFrame:
+    """Canonical weight/body-fat frame from direct Withings measurements."""
+    columns = ["date", "weight_kg", "body_fat_pct"]
+    if scale.empty or "date" not in scale.columns:
+        return pd.DataFrame(columns=columns)
+
+    available = [column for column in columns if column in scale.columns]
+    frame = scale[available].copy()
+    for column in columns:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame["weight_kg"] = pd.to_numeric(frame["weight_kg"], errors="coerce")
+    frame["body_fat_pct"] = pd.to_numeric(frame["body_fat_pct"], errors="coerce")
+    return (
+        frame[columns]
+        .dropna(subset=["date"])
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+
 st.title("🏋️ Training, Recovery & Goal Dashboard")
 st.caption(
-    "Dashboard powered by Hevy, Google Health/Cronometer, and direct Withings metrics."
+    "Source of truth: direct Withings for Withings-measured body metrics; "
+    "Google Health/Cronometer for other health data; Hevy for training."
 )
 
 local_google_token = (
@@ -1373,11 +1397,15 @@ if selected_section == "Overview & Goals":
         lambda: load_google_health_sleep(days=trend_days),
         source_status,
     )
-    body = safe_frame(
-        "Google Health body composition",
-        lambda: load_google_health_body(days=trend_days),
+    withings_measurements = safe_frame(
+        "Withings health metrics",
+        lambda: load_withings_metrics(days=max(365, trend_days)),
         source_status,
     )
+    withings_scale = build_withings_scale_sessions(
+        withings_measurements
+    )
+    body = withings_body_source(withings_scale)
     nutrition = safe_frame(
         "Cronometer nutrition",
         lambda: load_google_health_nutrition(days=trend_days),
@@ -1418,6 +1446,15 @@ elif selected_section == "Workout Review":
 
 elif selected_section == "Strength Progress":
     performance_history = build_exercise_performance_history(df)
+    withings_measurements = safe_frame(
+        "Withings health metrics",
+        lambda: load_withings_metrics(days=365),
+        source_status,
+    )
+    withings_scale = build_withings_scale_sessions(
+        withings_measurements
+    )
+    body = withings_body_source(withings_scale)
     goal_progress = build_goal_progress(
         goals,
         body,
@@ -1443,11 +1480,6 @@ elif selected_section == "Endurance":
     )
 
 elif selected_section == "Body Composition & Nutrition":
-    body = safe_frame(
-        "Google Health body composition",
-        lambda: load_google_health_body(days=365),
-        source_status,
-    )
     nutrition = safe_frame(
         "Cronometer nutrition",
         lambda: load_google_health_nutrition(days=trend_days),
@@ -1471,6 +1503,7 @@ elif selected_section == "Body Composition & Nutrition":
     withings_scale = build_withings_scale_sessions(
         withings_measurements
     )
+    body = withings_body_source(withings_scale)
     goal_progress = build_goal_progress(
         goals,
         body,
@@ -2239,8 +2272,8 @@ elif selected_section == "Body Composition & Nutrition":
 
     st.subheader("Overall Health Trends")
     st.caption(
-        "Weight and body-fat percentage use Google Health. Muscle mass %, water %, "
-        "visceral fat, and metabolic age use direct Withings measurements."
+        "Direct Withings is the source of truth for the body metrics shown here. "
+        "Google Health remains the source for non-Withings health metrics elsewhere."
     )
 
     latest_weight = latest_value(body, "weight_kg")
@@ -2325,20 +2358,6 @@ elif selected_section == "Body Composition & Nutrition":
             specs=[[{"secondary_y": True}]]
         )
 
-        if not weight_view.empty:
-            overall_fig.add_trace(
-                go.Scatter(
-                    x=weight_view["date"],
-                    y=weight_view["weight_kg"],
-                    mode="lines+markers",
-                    name="Weight (kg)",
-                    hovertemplate=(
-                        "%{x|%d %b %Y}<br>Weight: %{y:.2f} kg<extra></extra>"
-                    ),
-                ),
-                secondary_y=False,
-            )
-
         if not fat_view.empty:
             overall_fig.add_trace(
                 go.Scatter(
@@ -2375,6 +2394,23 @@ elif selected_section == "Body Composition & Nutrition":
                 secondary_y=True,
             )
 
+        if not weight_view.empty:
+            overall_fig.add_trace(
+                go.Scatter(
+                    x=weight_view["date"],
+                    y=weight_view["weight_kg"],
+                    mode="lines+markers",
+                    name="Weight (kg)",
+                    line={"width": 4},
+                    marker={"size": 6},
+                    legendrank=1,
+                    hovertemplate=(
+                        "%{x|%d %b %Y}<br>Weight: %{y:.2f} kg<extra></extra>"
+                    ),
+                ),
+                secondary_y=False,
+            )
+
         overall_fig.add_hline(
             y=90,
             line_dash="dash",
@@ -2397,12 +2433,11 @@ elif selected_section == "Body Composition & Nutrition":
                 weight_view["weight_kg"], errors="coerce"
             ).dropna()
             if not weight_values.empty:
-                weight_low = min(90.0, float(weight_values.min()))
+                weight_low = float(weight_values.min())
                 weight_high = float(weight_values.max())
-                spread = max(5.0, weight_high - weight_low)
                 weight_axis_range = [
-                    max(0.0, weight_low - max(2.0, spread * 0.08)),
-                    weight_high + max(2.0, spread * 0.12),
+                    min(88.0, weight_low - 1.5),
+                    weight_high + 2.0,
                 ]
 
         overall_fig.update_yaxes(
@@ -2412,7 +2447,7 @@ elif selected_section == "Body Composition & Nutrition":
         )
         overall_fig.update_yaxes(
             title_text="Body fat / water (%)",
-            range=[0, 60],
+            range=[0, 90],
             secondary_y=True,
         )
         overall_fig.update_layout(
