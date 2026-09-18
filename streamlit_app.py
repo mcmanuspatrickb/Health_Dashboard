@@ -2301,7 +2301,6 @@ elif selected_section == "Body Composition & Nutrition":
 
     withings_views = {}
     for label, column, unit in [
-        ("Muscle mass %", "muscle_mass_pct", "%"),
         ("Water %", "water_pct", "%"),
     ]:
         if not withings_scale.empty and column in withings_scale.columns:
@@ -2426,6 +2425,9 @@ elif selected_section == "Body Composition & Nutrition":
         fat_mass = latest_withings_value(
             withings_scale, "fat_mass_kg"
         )
+        muscle_mass = latest_withings_value(
+            withings_scale, "muscle_mass_kg"
+        )
         fat_free_mass = latest_withings_value(
             withings_scale, "fat_free_mass_kg"
         )
@@ -2440,9 +2442,9 @@ elif selected_section == "Body Composition & Nutrition":
             if fat_mass is not None else "—",
         )
         withings_cards[1].metric(
-            "Direct muscle mass %",
-            f"{direct_muscle_pct:.2f}%"
-            if direct_muscle_pct is not None else "—",
+            "Muscle mass",
+            f"{muscle_mass:.2f} kg"
+            if muscle_mass is not None else "—",
         )
         withings_cards[2].metric(
             "Fat-free mass",
