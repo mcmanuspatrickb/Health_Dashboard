@@ -1,0 +1,222 @@
+name: Apply dashboard trend patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/dashboard_trend_patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Apply dashboard changes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('streamlit_app.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'Expected exactly one match, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+
+          # Google Health steps daily rollup is limited to 90 days per request.
+          # Chunk requests so the dashboard-wide selector can support 180/365 days.
+          replace_once(
+              '''@st.cache_data(ttl=3600, show_spinner=False)\ndef load_google_health_steps(days: int = 14) -> pd.DataFrame:\n    client = GoogleHealthClient()\n    today = datetime.now(ZoneInfo("Europe/Berlin")).date()\n    end_date = today - timedelta(days=1)\n    start_date = end_date - timedelta(days=days - 1)\n    return load_steps(client, start_date, end_date)\n''',
+              '''@st.cache_data(ttl=3600, show_spinner=False)\ndef load_google_health_steps(days: int = 14) -> pd.DataFrame:\n    client = GoogleHealthClient()\n    today = datetime.now(ZoneInfo("Europe/Berlin")).date()\n    end_date = today - timedelta(days=1)\n    start_date = end_date - timedelta(days=days - 1)\n\n    chunks = []\n    chunk_start = start_date\n    while chunk_start <= end_date:\n        chunk_end = min(\n            chunk_start + timedelta(days=89),\n            end_date,\n        )\n        chunks.append(\n            load_steps(client, chunk_start, chunk_end)\n        )\n        chunk_start = chunk_end + timedelta(days=1)\n\n    if not chunks:\n        return pd.DataFrame(columns=["date", "steps"])\n    return (\n        pd.concat(chunks, ignore_index=True)\n        .drop_duplicates(subset=["date"], keep="last")\n        .sort_values("date")\n        .reset_index(drop=True)\n    )\n'''
+          )
+
+          # Reusable date-window filter for chart series.
+          replace_once(
+              '''    return {\n        "Source": label,\n        "Records": populated,\n        "Latest": latest,\n        "Missing recent days": missing,\n    }\n\n\nst.title("🏋️ Training, Recovery & Goal Dashboard")\n''',
+              '''    return {\n        "Source": label,\n        "Records": populated,\n        "Latest": latest,\n        "Missing recent days": missing,\n    }\n\n\ndef trend_window(\n    frame: pd.DataFrame,\n    date_column: str = "date",\n    days: int = 90,\n) -> pd.DataFrame:\n    """Return rows inside the selected dashboard trend window."""\n    if frame.empty or date_column not in frame.columns:\n        return frame.copy()\n\n    cutoff = (\n        datetime.now(ZoneInfo("Europe/Berlin")).date()\n        - timedelta(days=int(days))\n    )\n    dates = pd.to_datetime(\n        frame[date_column],\n        errors="coerce",\n    )\n    mask = dates.notna() & dates.dt.date.ge(cutoff)\n    return frame.loc[mask].copy()\n\n\nst.title("🏋️ Training, Recovery & Goal Dashboard")\n'''
+          )
+
+          replace_once(
+              '''    trend_days = st.selectbox(\n        "Default trend period",\n        [30, 60, 90, 180, 365],\n        index=2,\n    )\n''',
+              '''    trend_days = st.selectbox(\n        "Trend period (charts)",\n        [30, 60, 90, 180, 365],\n        index=2,\n        help=(\n            "Controls the visible time window for dashboard trend charts. "\n            "Fixed 7-day metrics and 28-day recovery baselines keep their "\n            "own analytical windows."\n        ),\n    )\n    trend_days = int(trend_days)\n'''
+          )
+
+          replace_once(
+              '''        "V14.3: Renpho record management is shown prominently near the top of the Renpho tab."\n''',
+              '''        "V14.4: trend charts follow the sidebar period; fixed 7-day/28-day analytics remain unchanged."\n'''
+          )
+
+          # Section loaders: retrieve enough history for the selected view.
+          replace_once('''        lambda: load_google_health_steps(days=90),\n''', '''        lambda: load_google_health_steps(days=trend_days),\n''')
+          replace_once('''        lambda: load_google_health_sleep(days=90),\n''', '''        lambda: load_google_health_sleep(days=trend_days),\n''')
+          replace_once('''        lambda: load_google_health_body(days=90),\n''', '''        lambda: load_google_health_body(days=trend_days),\n''')
+          replace_once('''        lambda: load_google_health_nutrition(days=90),\n''', '''        lambda: load_google_health_nutrition(days=trend_days),\n''')
+
+          # Workout Review keeps a 90-day context buffer for selectable workouts and baselines.
+
+          replace_once(
+              '''        lambda: load_google_health_body(days=365),\n''',
+              '''        lambda: load_google_health_body(days=max(trend_days, 28)),\n'''
+          )
+          # The second nutrition=90 occurrence is Body Composition & Nutrition.
+          old = '''        lambda: load_google_health_nutrition(days=90),\n'''
+          if text.count(old) < 1:
+              raise RuntimeError('Could not find Body Composition nutrition loader')
+          text = text.replace(old, '''        lambda: load_google_health_nutrition(days=trend_days),\n''', 1)
+          replace_once(
+              '''        lambda: load_google_health_endurance_sessions(days=90),\n''',
+              '''        lambda: load_google_health_endurance_sessions(days=max(90, trend_days)),\n'''
+          )
+
+          # Recovery needs a 28-day pre-window buffer so the baseline is valid at the left edge.
+          # Replace the Recovery/Data Quality loader occurrences that remain at 90 days.
+          recovery_loader = '''        lambda: load_google_health_recovery(days=90),\n'''
+          if text.count(recovery_loader) != 2:
+              raise RuntimeError(f'Expected two recovery=90 loaders, found {text.count(recovery_loader)}')
+          text = text.replace(recovery_loader, '''        lambda: load_google_health_recovery(days=90),\n''', 1)
+          text = text.replace(recovery_loader, '''        lambda: load_google_health_recovery(days=trend_days + 28),\n''', 1)
+
+          sleep_loader = '''        lambda: load_google_health_sleep(days=90),\n'''
+          if text.count(sleep_loader) != 2:
+              raise RuntimeError(f'Expected two remaining sleep=90 loaders, found {text.count(sleep_loader)}')
+          text = text.replace(sleep_loader, '''        lambda: load_google_health_sleep(days=90),\n''', 1)
+          text = text.replace(sleep_loader, '''        lambda: load_google_health_sleep(days=trend_days + 28),\n''', 1)
+
+          steps_loader = '''        lambda: load_google_health_steps(days=90),\n'''
+          if text.count(steps_loader) != 2:
+              raise RuntimeError(f'Expected two remaining steps=90 loaders, found {text.count(steps_loader)}')
+          text = text.replace(steps_loader, '''        lambda: load_google_health_steps(days=90),\n''', 1)
+          text = text.replace(steps_loader, '''        lambda: load_google_health_steps(days=max(14, trend_days)),\n''', 1)
+
+          # Overview charts.
+          replace_once(
+              '''        st.subheader("Latest 30 days — activity")\n''',
+              '''        st.subheader(f"Latest {trend_days} days — activity")\n'''
+          )
+          replace_once(
+              '''                health_steps.tail(30),\n''',
+              '''                trend_window(health_steps, "date", trend_days),\n'''
+          )
+          replace_once(
+              '''        st.subheader("Latest 30 days — training load")\n''',
+              '''        st.subheader(f"Latest {trend_days} days — training load")\n'''
+          )
+          replace_once(
+              '''            load_chart = session_summary.dropna(subset=["session_load"]).copy()\n            load_chart = load_chart.sort_values("start_time").tail(30)\n''',
+              '''            load_chart = session_summary.dropna(subset=["session_load"]).copy()\n            load_chart = trend_window(\n                load_chart.sort_values("start_time"),\n                "start_time",\n                trend_days,\n            )\n'''
+          )
+
+          # Strength trend charts use the selected date window rather than a fixed 20 sessions.
+          replace_once(
+              '''elif selected_section == "Strength Progress":\n    st.header("Strength progress")\n    if performance_history.empty:\n        st.info("No working-set performance history is available.")\n''',
+              '''elif selected_section == "Strength Progress":\n    st.header("Strength progress")\n    performance_history = trend_window(\n        performance_history,\n        "start_time",\n        trend_days,\n    )\n    if performance_history.empty:\n        st.info(\n            f"No working-set performance history is available in the "\n            f"last {trend_days} days."\n        )\n'''
+          )
+          replace_once(
+              '''].sort_values("start_time").tail(20)\n''',
+              '''].sort_values("start_time")\n'''
+          )
+
+          # Endurance trend/summary window; goal comparisons retain the full loaded history.
+          replace_once(
+              '''        activity = activity.dropna(subset=["date"]).sort_values("date")\n\n        st.subheader(f"{activity_labels[selected_activity]} summary")\n''',
+              '''        activity = activity.dropna(subset=["date"]).sort_values("date")\n        activity = trend_window(activity, "date", trend_days)\n\n        st.subheader(\n            f"{activity_labels[selected_activity]} summary — "\n            f"last {trend_days} days"\n        )\n'''
+          )
+
+          # Withings dropdown: add the two existing mass fields, then filter all trend lines.
+          replace_once(
+              '''        trend_defs = {\n            "Muscle mass %": ("muscle_mass_pct", "%"),\n            "Muscle mass": ("muscle_mass_kg", "kg"),\n''',
+              '''        trend_defs = {\n            "Muscle mass %": ("muscle_mass_pct", "%"),\n            "Muscle mass": ("muscle_mass_kg", "kg"),\n            "Fat-free mass": ("fat_free_mass_kg", "kg"),\n            "Fat mass": ("fat_mass_kg", "kg"),\n'''
+          )
+          replace_once(
+              '''            metric_trend = withings_scale[\n                ["date", metric_column]\n            ].dropna(subset=[metric_column]).copy()\n\n            if metric_trend.empty:\n''',
+              '''            metric_trend = withings_scale[\n                ["date", metric_column]\n            ].dropna(subset=[metric_column]).copy()\n            metric_trend = trend_window(\n                metric_trend,\n                "date",\n                trend_days,\n            )\n\n            if metric_trend.empty:\n'''
+          )
+
+          # Hevy tape-measure charts use the selected period; current/latest cards still use all history.
+          replace_once(
+              '''        measurement_long = build_measurement_long_frame(\n            hevy_measurements,\n            selected_measurement,\n        )\n\n        if measurement_long.empty:\n''',
+              '''        measurement_long = build_measurement_long_frame(\n            hevy_measurements,\n            selected_measurement,\n        )\n        measurement_long = trend_window(\n            measurement_long,\n            "date",\n            trend_days,\n        )\n\n        if measurement_long.empty:\n'''
+          )
+          replace_once(
+              '''        st.caption(\n            "Measurement charts use all available Hevy tape-measure history "\n            "because circumference entries are less frequent than weight measurements."\n        )\n''',
+              '''        st.caption(\n            f"Measurement charts show the selected {trend_days}-day trend period. "\n            "Current/latest measurement cards still use all available Hevy history."\n        )\n'''
+          )
+
+          # Nutrition chart and comparison tables use the selected trend period; 7-day cards remain fixed.
+          replace_once(
+              '''        recent = logged.sort_values("date_only").tail(30)\n        seven = logged.sort_values("date_only").tail(7)\n''',
+              '''        recent = trend_window(\n            logged.sort_values("date_only"),\n            "date",\n            trend_days,\n        )\n        seven = logged.sort_values("date_only").tail(7)\n'''
+          )
+          replace_once(
+              '''        n[3].metric("Logged days — last 30", len(recent))\n''',
+              '''        n[3].metric(f"Logged days — last {trend_days}", len(recent))\n'''
+          )
+
+          # Recovery and sleep: calculate 28-day baselines on the buffered source, then show selected window.
+          replace_once(
+              '''            recent = recovery.tail(60).copy()\n            recent["rhr_28d"] = pd.to_numeric(\n''',
+              '''            recent = recovery.sort_values("date").copy()\n            recent["rhr_28d"] = pd.to_numeric(\n'''
+          )
+          replace_once(
+              '''            recent["hrv_28d"] = pd.to_numeric(\n                recent["hrv_ms"],\n                errors="coerce",\n            ).rolling(28, min_periods=7).mean()\n\n            rhr_fig = px.line(\n''',
+              '''            recent["hrv_28d"] = pd.to_numeric(\n                recent["hrv_ms"],\n                errors="coerce",\n            ).rolling(28, min_periods=7).mean()\n            recent = trend_window(recent, "date", trend_days)\n\n            rhr_fig = px.line(\n'''
+          )
+          replace_once(
+              '''        main_sleep = (\n            sleep.dropna(subset=["sleep_hours"]).tail(60).copy()\n            if not sleep.empty\n            else pd.DataFrame()\n        )\n''',
+              '''        main_sleep = (\n            sleep.dropna(subset=["sleep_hours"]).sort_values("date").copy()\n            if not sleep.empty\n            else pd.DataFrame()\n        )\n'''
+          )
+          replace_once(
+              '''            main_sleep["sleep_28d"] = pd.to_numeric(\n                main_sleep["sleep_hours"],\n                errors="coerce",\n            ).rolling(28, min_periods=7).mean()\n\n            fig = px.line(\n''',
+              '''            main_sleep["sleep_28d"] = pd.to_numeric(\n                main_sleep["sleep_hours"],\n                errors="coerce",\n            ).rolling(28, min_periods=7).mean()\n            main_sleep = trend_window(\n                main_sleep,\n                "date",\n                trend_days,\n            )\n\n            fig = px.line(\n'''
+          )
+          replace_once(
+              '''            stages = main_sleep.tail(30)[\n''',
+              '''            stages = main_sleep[\n'''
+          )
+          replace_once(
+              '''        bp_recent = withings_bp.sort_values("date").tail(60).copy()\n''',
+              '''        bp_recent = trend_window(\n            withings_bp.sort_values("date"),\n            "date",\n            trend_days,\n        )\n'''
+          )
+
+          # Renpho is monthly, but its time-series charts should still honor the dashboard trend selector.
+          replace_once(
+              '''        renpho_history = renpho_measurements.sort_values(\n            "measured_at"\n        ).copy()\n        latest = renpho_history.iloc[-1]\n''',
+              '''        renpho_history = renpho_measurements.sort_values(\n            "measured_at"\n        ).copy()\n        renpho_trend_history = trend_window(\n            renpho_history,\n            "measured_at",\n            trend_days,\n        )\n        latest = renpho_history.iloc[-1]\n'''
+          )
+          for old, new in [
+              ('weight_data = renpho_history.dropna(', 'weight_data = renpho_trend_history.dropna('),
+              ('muscle_data = renpho_history.dropna(', 'muscle_data = renpho_trend_history.dropna('),
+              ('fat_pct_data = renpho_history.dropna(', 'fat_pct_data = renpho_trend_history.dropna('),
+              ('mass_trend = renpho_history[', 'mass_trend = renpho_trend_history['),
+              ('if len(renpho_history) == 1:', 'if len(renpho_trend_history) == 1:'),
+              ('for _, row in renpho_history.iterrows():', 'for _, row in renpho_trend_history.iterrows():'),
+              ('health_trend = renpho_history[', 'health_trend = renpho_trend_history['),
+          ]:
+              replace_once(old, new)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate Python syntax
+        run: python -m py_compile streamlit_app.py
+
+      - name: Commit dashboard update
+        shell: bash
+        run: |
+          if git diff --quiet -- streamlit_app.py; then
+            echo 'No dashboard changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add streamlit_app.py
+          git commit -m 'Wire trend period and add Withings fat trends'
+          git push
