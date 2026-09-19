@@ -333,12 +333,17 @@ def build_recomposition_summary(
 
     waist = waist_history(hevy_measurements)
     waist_delta = None
+    waist_span_days = None
     if len(waist) >= 2:
-        latest_waist = float(waist.iloc[-1]["waist_cm"])
+        latest_row = waist.iloc[-1]
+        latest_waist = float(latest_row["waist_cm"])
+        latest_waist_date = pd.Timestamp(latest_row["date"])
         cutoff = pd.Timestamp(end_date) - pd.Timedelta(days=28)
         earlier = waist[waist["date"] <= cutoff]
         if not earlier.empty:
-            waist_delta = latest_waist - float(earlier.iloc[-1]["waist_cm"])
+            earlier_row = earlier.iloc[-1]
+            waist_delta = latest_waist - float(earlier_row["waist_cm"])
+            waist_span_days = int((latest_waist_date - pd.Timestamp(earlier_row["date"])).days)
 
     interpretation: list[str] = []
     if fat_delta is not None:
@@ -407,6 +412,7 @@ def build_recomposition_summary(
         "sleep_28": sleep_28_avg,
         "steps_28": steps_28_avg,
         "waist_change_28d": waist_delta,
+        "waist_span_days": waist_span_days,
         "strength_up": strength_up,
         "strength_flat": strength_flat,
         "strength_down": strength_down,

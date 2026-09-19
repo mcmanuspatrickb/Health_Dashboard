@@ -23,6 +23,7 @@ from renpho_data import (
     load_renpho_measurements,
 )
 from recomposition import build_recomposition_summary
+from coaching_snapshot import load_latest_coaching_snapshot
 from grip_data import (
     delete_grip_measurement,
     insert_grip_measurement,
@@ -1747,7 +1748,8 @@ if selected_section == "Overview & Goals":
                 y="steps",
                 labels={"date": "Date", "steps": "Steps"},
             )
-            fig.add_hline(y=8000, line_dash="dash", annotation_text="8,000")
+            fig.add_hline(y=7000, line_dash="dash", annotation_text="7,000 floor")
+            fig.add_hline(y=8000, line_dash="dot", annotation_text="8,000 preferred")
             fig.update_layout(height=320, xaxis_tickformat="%d %b")
             st.plotly_chart(fig, use_container_width=True)
     with right:
@@ -2323,6 +2325,12 @@ elif selected_section == "Fat Loss & Muscle Preservation":
         "Google Health supplies recovery/activity, and Hevy supplies strength and waist data."
     )
 
+    canonical_snapshot = {}
+    try:
+        canonical_snapshot = load_latest_coaching_snapshot() or {}
+    except Exception as exc:
+        st.caption(f"Canonical weekly coaching snapshot is temporarily unavailable: {exc}")
+
     recomp = build_recomposition_summary(
         withings_scale=withings_scale,
         nutrition=nutrition,
@@ -2339,19 +2347,55 @@ elif selected_section == "Fat Loss & Muscle Preservation":
     else:
         st.caption(f"Latest complete analysis date: {analysis_end.strftime('%d %b %Y')}")
 
+        if canonical_snapshot:
+            st.subheader("Canonical coaching status")
+            st.caption(
+                "This is the authoritative weekly interpretation shared with the email system. "
+                "The live charts below remain exploratory views of the underlying measurements."
+            )
+            cstates = canonical_snapshot.get("states", {})
+            cdecision = canonical_snapshot.get("decision", {})
+            cenergy = canonical_snapshot.get("energy", {})
+            ccols = st.columns(6)
+            ccols[0].metric("Fat loss", str(cstates.get("fat_loss", "—")).replace("_", " ").title())
+            ccols[1].metric("Muscle preservation", str(cstates.get("muscle_preservation", "—")).replace("_", " ").title())
+            ccols[2].metric("Recovery", str(cstates.get("recovery", "—")).replace("_", " ").title())
+            ccols[3].metric("Training", str(cstates.get("training", "—")).replace("_", " ").title())
+            ccols[4].metric(
+                "Calorie action",
+                f"{str(cdecision.get('action', 'HOLD')).title()} {float(cdecision.get('calorie_adjustment') or 0):+.0f}",
+                f"Target {float(cdecision.get('target_intake')):.0f} kcal/day" if cdecision.get("target_intake") is not None else None,
+            )
+            ccols[5].metric(
+                "Planning maintenance",
+                f"{float(cenergy.get('planning_tdee')):,.0f} kcal/day" if cenergy.get("planning_tdee") is not None else "—",
+                (f"{float(cenergy.get('planning_range_low')):,.0f}-{float(cenergy.get('planning_range_high')):,.0f}"
+                 if cenergy.get("planning_range_low") is not None and cenergy.get("planning_range_high") is not None else None),
+            )
+            priorities = canonical_snapshot.get("priorities", []) or []
+            if priorities:
+                st.markdown("**Current priorities:** " + " · ".join(str(item) for item in priorities))
+            training_groups = canonical_snapshot.get("training_dose", {}).get("groups", []) or []
+            if training_groups:
+                with st.expander("Canonical training dose by primary muscle group"):
+                    dose = pd.DataFrame(training_groups)
+                    dose = dose[dose["muscle_group"] != "Other / unmapped"] if "muscle_group" in dose.columns else dose
+                    st.dataframe(dose, use_container_width=True, hide_index=True)
+                    st.caption(canonical_snapshot.get("training_dose", {}).get("method", ""))
+
         cards = st.columns(6)
         cards[0].metric(
-            "28d weight trend",
+            "Weight change in 28d window",
             f"{summary.get('weight_change_28d'):+.2f} kg"
             if summary.get("weight_change_28d") is not None else "—",
         )
         cards[1].metric(
-            "28d fat-mass trend",
+            "Fat-mass change in 28d window",
             f"{summary.get('fat_change_28d'):+.2f} kg"
             if summary.get("fat_change_28d") is not None else "—",
         )
         cards[2].metric(
-            "28d fat-free-mass trend",
+            "FFM change in 28d window",
             f"{summary.get('ffm_change_28d'):+.2f} kg"
             if summary.get("ffm_change_28d") is not None else "—",
         )
@@ -2377,13 +2421,16 @@ elif selected_section == "Fat Loss & Muscle Preservation":
             f"{summary.get('estimated_deficit'):,.0f} kcal/day"
             if summary.get("estimated_deficit") is not None else "—",
         )
+        canonical_adherence = canonical_snapshot.get("adherence", {}) if canonical_snapshot else {}
+        protein_logged = canonical_adherence.get("protein_days_logged", 0)
+        protein_met = canonical_adherence.get("protein_days_met", 0)
         second[1].metric(
-            "BIA fat share of loss",
-            f"{summary.get('fat_share_of_loss_pct'):.0f}%"
-            if summary.get("fat_share_of_loss_pct") is not None else "—",
+            "Protein target days",
+            f"{protein_met}/{protein_logged}" if protein_logged else "—",
         )
+        waist_span = summary.get("waist_span_days")
         second[2].metric(
-            "Waist — ~28d change",
+            f"Waist change ({waist_span}d)" if waist_span is not None else "Waist change",
             f"{summary.get('waist_change_28d'):+.1f} cm"
             if summary.get("waist_change_28d") is not None else "—",
         )
@@ -2398,6 +2445,12 @@ elif selected_section == "Fat Loss & Muscle Preservation":
             if summary.get("steps_28") is not None else "—",
         )
 
+        if summary.get("fat_share_of_loss_pct") is not None:
+            st.caption(
+                f"Experimental BIA-derived fat share of scale loss: ~{summary.get('fat_share_of_loss_pct'):.0f}%. "
+                "This is supporting context only because both fat and fat-free compartments are hydration-sensitive."
+            )
+
         low = summary.get("protein_low")
         high = summary.get("protein_high")
         if low is not None and high is not None:
@@ -2407,7 +2460,7 @@ elif selected_section == "Fat Loss & Muscle Preservation":
             )
 
         st.subheader("What the combined signals say")
-        interpretations = recomp.get("interpretation", [])
+        interpretations = (canonical_snapshot.get("interpretation", []) if canonical_snapshot else []) or recomp.get("interpretation", [])
         if interpretations:
             for item in interpretations:
                 st.markdown(f"- {item}")
@@ -2445,7 +2498,24 @@ elif selected_section == "Fat Loss & Muscle Preservation":
                 fig.update_layout(height=420, xaxis_tickformat="%d %b %Y")
                 st.plotly_chart(fig, use_container_width=True)
 
-        strength = recomp.get("strength", pd.DataFrame()).copy()
+        canonical_lifts = canonical_snapshot.get("strength", {}).get("lifts", []) if canonical_snapshot else []
+        if canonical_lifts:
+            strength = pd.DataFrame(canonical_lifts).rename(columns={
+                "label": "Lift",
+                "current_best_e1rm": "Current 4w best e1RM",
+                "prior_best_e1rm": "Prior 4w best e1RM",
+                "change_e1rm": "Change kg",
+                "direction": "Direction",
+                "current_observations": "Current observations",
+                "prior_observations": "Prior observations",
+            })
+            keep = [
+                "Lift", "Current 4w best e1RM", "Prior 4w best e1RM", "Change kg",
+                "Direction", "Current observations", "Prior observations",
+            ]
+            strength = strength[[c for c in keep if c in strength.columns]]
+        else:
+            strength = recomp.get("strength", pd.DataFrame()).copy()
         st.subheader("4-week strength cross-check")
         if strength.empty:
             st.info("Not enough like-for-like core-lift observations exist in both four-week windows yet.")
