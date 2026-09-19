@@ -1,0 +1,33 @@
+name: Integrate Recomposition Dashboard v2
+
+on:
+  push:
+    paths:
+      - ".github/workflows/recomposition_patch_v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Patch dashboard
+        run: python patch_recomposition_dashboard.py
+      - name: Compile dashboard
+        run: python -m py_compile recomposition.py streamlit_app.py
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- streamlit_app.py; then
+            echo "No dashboard changes needed."
+            exit 0
+          fi
+          git add streamlit_app.py
+          git commit -m "Integrate fat loss and muscle preservation dashboard"
+          git push
