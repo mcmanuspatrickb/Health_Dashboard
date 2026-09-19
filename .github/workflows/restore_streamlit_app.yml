@@ -1,0 +1,43 @@
+name: Restore Streamlit App
+
+on:
+  push:
+    paths:
+      - ".github/workflows/restore_streamlit_app.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Restore validated canonical dashboard file
+        run: |
+          git checkout 18f56838a15d40bcfa825c9e55dac71c9bee9050 -- streamlit_app.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('streamlit_app.py')
+          text = p.read_text(encoding='utf-8')
+          old = '''            st.caption(\n                f"Comparable lifts: {summary.get('strength_up', 0)} up, "\n                f"{summary.get('strength_flat', 0)} flat, "\n                f"{summary.get('strength_down', 0)} down."\n            )\n'''
+          new = '''            if canonical_lifts:\n                canonical_strength = canonical_snapshot.get("strength", {})\n                st.caption(\n                    f"Comparable lifts: {canonical_strength.get('up', 0)} up, "\n                    f"{canonical_strength.get('flat', 0)} flat, "\n                    f"{canonical_strength.get('down', 0)} down."\n                )\n            else:\n                st.caption(\n                    f"Comparable lifts: {summary.get('strength_up', 0)} up, "\n                    f"{summary.get('strength_flat', 0)} flat, "\n                    f"{summary.get('strength_down', 0)} down."\n                )\n'''
+          if old not in text:
+              raise SystemExit('strength caption patch target not found')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Compile restored dashboard
+        run: python -m py_compile streamlit_app.py recomposition.py coaching_snapshot.py
+      - name: Commit restore
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add streamlit_app.py
+          git commit -m "Restore validated canonical dashboard app"
+          git pull --rebase origin main
+          git push origin HEAD:main
