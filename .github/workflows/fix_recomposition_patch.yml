@@ -1,0 +1,32 @@
+name: Fix Recomposition Patch
+
+on:
+  push:
+    paths:
+      - ".github/workflows/fix_recomposition_patch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fix raw render block and commit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/recomposition_patch.yml')
+          text = path.read_text(encoding='utf-8')
+          old = "render_block = '''elif selected_section"
+          new = "render_block = r'''elif selected_section"
+          if old not in text:
+              raise SystemExit('render block anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/recomposition_patch.yml
+          git commit -m "Fix recomposition patch string escaping"
+          git push
