@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import psycopg
@@ -80,7 +81,7 @@ def insert_grip_measurement(
         raise ValueError("Enter at least one grip-strength attempt.")
 
     measured_at = datetime.combine(measured_date, measured_time).replace(
-        tzinfo=timezone.utc
+        tzinfo=ZoneInfo("Europe/Berlin")
     )
     with psycopg.connect(_database_url()) as con:
         _ensure_table(con)
@@ -149,7 +150,8 @@ def load_grip_measurements() -> pd.DataFrame:
     if frame.empty:
         return frame
 
-    frame["measured_at"] = pd.to_datetime(frame["measured_at"], errors="coerce")
+    frame["measured_at"] = pd.to_datetime(frame["measured_at"], errors="coerce", utc=True)
+    frame["measured_at"] = frame["measured_at"].dt.tz_convert("Europe/Berlin")
     left_cols = ["left_1_kg", "left_2_kg", "left_3_kg"]
     right_cols = ["right_1_kg", "right_2_kg", "right_3_kg"]
     for column in left_cols + right_cols:
