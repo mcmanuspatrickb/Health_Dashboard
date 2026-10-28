@@ -2,7 +2,10 @@ name: Withings Sync
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    # Run after the usual morning weigh-in, plus an evening catch-up.
+    # Europe/Berlin handles CET/CEST daylight-saving transitions.
+    - cron: "15 10,18 * * *"
+      timezone: "Europe/Berlin"
   workflow_dispatch:
 
 permissions:
