@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import os
 from typing import Any
 
@@ -72,7 +73,7 @@ def load_latest_coaching_snapshot() -> dict[str, Any]:
 
 def snapshot_freshness(snapshot: dict[str, Any], today: date | None = None) -> dict[str, Any]:
     """UI-only snapshot age metadata; never changes canonical coaching values."""
-    current = today or date.today()
+    current = today or datetime.now(ZoneInfo("Europe/Berlin")).date()
     raw = str(snapshot.get("analysis_date") or "")
     try:
         day = date.fromisoformat(raw[:10])
