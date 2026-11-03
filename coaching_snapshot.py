@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import os
 from typing import Any
 
@@ -67,3 +69,16 @@ def load_latest_coaching_snapshot() -> dict[str, Any]:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
     return dict(value) if value is not None else {}
+
+
+def snapshot_freshness(snapshot: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+    """UI-only snapshot age metadata; never changes canonical coaching values."""
+    current = today or datetime.now(ZoneInfo("Europe/Berlin")).date()
+    raw = str(snapshot.get("analysis_date") or "")
+    try:
+        day = date.fromisoformat(raw[:10])
+    except ValueError:
+        return {"age_days": None, "status": "UNKNOWN", "analysis_date": raw}
+    age = (current - day).days
+    status = "FUTURE_DATED" if age < 0 else "STALE" if age > 7 else "CURRENT"
+    return {"analysis_date": day.isoformat(), "age_days": age, "status": status}

@@ -23,7 +23,7 @@ from renpho_data import (
     load_renpho_measurements,
 )
 from recomposition import build_recomposition_summary
-from coaching_snapshot import load_latest_coaching_snapshot
+from coaching_snapshot import load_latest_coaching_snapshot, snapshot_freshness
 from grip_data import (
     delete_grip_measurement,
     insert_grip_measurement,
@@ -1827,6 +1827,7 @@ elif selected_section == "Workout Review":
         top[3].metric("Session RPE", f"{selected['session_rpe']:.1f}" if pd.notna(selected.get("session_rpe")) else "—")
         top[4].metric("Session load", f"{selected['session_load']:.0f}" if pd.notna(selected.get("session_load")) else "—")
 
+        st.caption("Rolling maintenance above is an exploratory dashboard estimate, not a second canonical calorie recommendation.")
         second = st.columns(5)
         second[0].metric("Working sets", f"{working_sets:.0f}" if pd.notna(working_sets) else "—")
         second[1].metric("Warm-up sets", f"{selected['warmup_sets']:.0f}" if pd.notna(selected.get("warmup_sets")) else "—")
@@ -2356,21 +2357,49 @@ elif selected_section == "Fat Loss & Muscle Preservation":
             cstates = canonical_snapshot.get("states", {})
             cdecision = canonical_snapshot.get("decision", {})
             cenergy = canonical_snapshot.get("energy", {})
+            cfasting = canonical_snapshot.get("fasting", {})
+            age = snapshot_freshness(canonical_snapshot)
+            st.caption(
+                f"Canonical analysis through {age.get('analysis_date') or 'unknown'} "
+                f"({age.get('age_days', 'unknown')} days old); "
+                f"generated {canonical_snapshot.get('generated_at', 'unknown')}. "
+                "The live exploratory calculations below may use newer data."
+            )
+            if age["status"] in {"STALE", "UNKNOWN", "FUTURE_DATED"}:
+                st.warning("The canonical coaching snapshot is not current; do not mistake exploratory charts for an updated coaching decision.")
+            if cdecision.get("review_required"):
+                st.warning(
+                    "Calorie recommendation is PROVISIONAL and requires review: "
+                    + str(cdecision.get("review_reason") or "Fasting history or TDEE confidence is insufficient.")
+                )
+            st.caption(
+                f"28/42-day TDEE agreement: {cenergy.get('stability', 'unknown')}; "
+                f"independent confidence: {cenergy.get('confidence', 'not yet assessed')}. "
+                f"Fasting evidence: {cfasting.get('evidence_quality', 'not yet assessed')}. "
+                "Overlapping windows can agree while both are biased by water-weight changes."
+            )
             ccols = st.columns(6)
             ccols[0].metric("Fat loss", str(cstates.get("fat_loss", "—")).replace("_", " ").title())
             ccols[1].metric("Muscle preservation", str(cstates.get("muscle_preservation", "—")).replace("_", " ").title())
             ccols[2].metric("Recovery", str(cstates.get("recovery", "—")).replace("_", " ").title())
             ccols[3].metric("Training", str(cstates.get("training", "—")).replace("_", " ").title())
             ccols[4].metric(
-                "Calorie action",
+                "Calorie action (review)" if cdecision.get("review_required") else "Calorie action",
                 f"{str(cdecision.get('action', 'HOLD')).title()} {float(cdecision.get('calorie_adjustment') or 0):+.0f}",
-                f"Target {float(cdecision.get('target_intake')):.0f} kcal/day" if cdecision.get("target_intake") is not None else None,
+                (f"Provisional {float(cdecision.get('target_intake')):.0f} kcal/day" if cdecision.get("review_required")
+                 else f"Target {float(cdecision.get('target_intake')):.0f} kcal/day") if cdecision.get("target_intake") is not None else None,
             )
             ccols[5].metric(
                 "Planning maintenance",
                 f"{float(cenergy.get('planning_tdee')):,.0f} kcal/day" if cenergy.get("planning_tdee") is not None else "—",
                 (f"{float(cenergy.get('planning_range_low')):,.0f}-{float(cenergy.get('planning_range_high')):,.0f}"
                  if cenergy.get("planning_range_low") is not None and cenergy.get("planning_range_high") is not None else None),
+            )
+            st.caption(
+                "Theoretical model intake: "
+                + (f"{float(cdecision['theoretical_model_intake']):.0f} kcal/day"
+                   if cdecision.get("theoretical_model_intake") is not None else "not available")
+                + ". The operational/provisional intake target is a distinct coaching calculation."
             )
             priorities = canonical_snapshot.get("priorities", []) or []
             if priorities:
@@ -2410,7 +2439,7 @@ elif selected_section == "Fat Loss & Muscle Preservation":
             if summary.get("protein_7") is not None else "—",
         )
         cards[5].metric(
-            "Rolling maintenance",
+            "Rolling maintenance (exploratory)",
             f"{summary.get('estimated_tdee'):,.0f} kcal/day"
             if summary.get("estimated_tdee") is not None else "—",
         )
